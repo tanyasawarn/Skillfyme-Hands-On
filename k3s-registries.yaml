@@ -1,0 +1,14 @@
+# Tells k3s's embedded containerd to treat registry:5000 (the
+# docker-compose `registry` service, reachable by compose DNS from
+# inside the k3s container) as plain HTTP, not HTTPS -- a bare
+# `registry:2` image speaks plain HTTP only, and containerd refuses an
+# unconfigured registry over HTTP by default. Mounted into the k3s
+# container at /etc/rancher/k3s/registries.yaml (see docker-compose.yml).
+mirrors:
+  "registry:5000":
+    endpoint:
+      - "http://registry:5000"
+configs:
+  "registry:5000":
+    tls:
+      insecure_skip_verify: true

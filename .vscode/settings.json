@@ -1,0 +1,10 @@
+{
+  "files.exclude": {
+    "**/.env": false,
+    "**/.env.*": false,
+    "**/.env.local": false,
+    "**/.env.local.example": false,
+    "**/.env.example": false
+  },
+  "explorer.excludeGitIgnore": false
+}

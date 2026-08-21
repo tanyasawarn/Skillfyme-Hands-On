@@ -31,18 +31,22 @@ import (
 // strategy: "a small set of base images (ubuntu-tools, python-ds, node,
 // jvm, cloud-cli)... pulled from a regional pull-through cache." M1.11
 // (build + publish those images to a real registry, DaemonSet pre-pull
-// them onto every node) is NOT implemented in this Phase 1 slice --
-// "practiceengine/ubuntu-tools" etc. are the doc's own naming convention
-// for images that would need to be built and pushed to a real registry;
-// they don't exist anywhere yet. Mapped here to a real, publicly
-// pullable image with equivalent shell tooling (bash, coreutils) so
-// Provision() actually works end-to-end today; swap these for the real
-// built images once M1.11's build pipeline exists -- this map is the
-// single place that changes.
+// them onto every node) -- the "build + publish to a real registry" half
+// is now real: orchestrator/images/linux-tools/Dockerfile builds a real
+// git+kubectl+coreutils image, pushed to a local registry (docker-compose's
+// `registry` service, registry:2, see docker-compose.yml + k3s-registries.yaml
+// for the insecure-HTTP containerd config that lets k3s pull from it).
+// "registry:5000" (not localhost:5001) is deliberate: that's the
+// compose-network DNS name/port k3s's own containerd resolves, not the
+// host-mapped port `docker push` uses from outside the compose network --
+// two different addresses for the same registry, reachable from two
+// different places. DaemonSet pre-pull (the other M1.11 half) is still
+// not implemented -- Phase 1's provisioning rate doesn't yet justify it,
+// and every pull still succeeds today, just not pre-warmed.
 var blueprintImage = map[string]string{
-	"bp.k8s-single-node.v1": "docker.io/library/ubuntu:24.04",
-	"bp.docker.v1":          "docker.io/library/ubuntu:24.04",
-	"bp.linux.v1":           "docker.io/library/ubuntu:24.04",
+	"bp.k8s-single-node.v1": "registry:5000/practiceengine/linux-tools:v1",
+	"bp.docker.v1":          "registry:5000/practiceengine/linux-tools:v1",
+	"bp.linux.v1":           "registry:5000/practiceengine/linux-tools:v1",
 	"bp.test.v1":            "docker.io/library/busybox:latest", // no bash -- fine for provisioning smoke tests, not for telemetry-hook-dependent session tests
 }
 

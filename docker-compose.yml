@@ -35,6 +35,26 @@ services:
       - "4222:4222"
       - "8222:8222"   # monitoring
 
+  # Local image registry (doc §5.2 image strategy, M1.11): a real place
+  # to build+push the workspace base images to, instead of the
+  # placeholder bare ubuntu:24.04 every environment used until now. Plain
+  # `registry:2`, no TLS/auth -- k3s's containerd is told to trust it as
+  # plain-HTTP via k3s-registries.yaml below, which is the standard way
+  # to run an insecure local registry for dev (a real deployment would
+  # use a real registry with auth + TLS + a pull-through cache instead).
+  registry:
+    image: registry:2
+    ports:
+      # Host port 5001, not 5000 -- macOS's AirPlay Receiver (ControlCenter)
+      # squats on 5000 by default, confirmed live (`lsof -i :5000` showed
+      # it holding the port). Internal container port stays 5000, which is
+      # what matters for k3s's containerd (it resolves `registry:5000` via
+      # compose DNS on the shared network, never touching the host port).
+      - "5001:5000"
+    volumes:
+      - registry_data:/var/lib/registry
+    profiles: ["dev-a", "full"]
+
   # Single-node k3s for Dev A's early T1 work (doc §5.2 workhorse tier).
   # Not required for Dev B's Phase 1 milestones except where Content CI
   # needs a real provision target (§3.5 step 2) — until Dev A's
@@ -53,8 +73,16 @@ services:
     volumes:
       - k3s_data:/var/lib/rancher/k3s
       - ./.local/k3s-output:/output
+      # Tells k3s's embedded containerd that the `registry` service
+      # (reachable by compose DNS name on the shared default network) is
+      # a plain-HTTP registry, not the TLS+auth every registry normally
+      # needs -- otherwise containerd refuses to pull from it at all.
+      - ./k3s-registries.yaml:/etc/rancher/k3s/registries.yaml:ro
+    depends_on:
+      - registry
     profiles: ["dev-a", "full"]   # not started by default `docker-compose up`
 
 volumes:
   pg_data:
   k3s_data:
+  registry_data:

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joho/godotenv"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
@@ -41,6 +42,16 @@ import (
 )
 
 func main() {
+	// Loads orchestrator/.env into the process environment if present --
+	// mirrors practice-core's own .env convention (that one's read by
+	// @nestjs/config automatically; Go has no built-in equivalent, hence
+	// godotenv). Deliberately silent on a missing file (Err ignored, not
+	// Fatal): a real deployment sets these as real env vars/secrets and
+	// has no .env file at all, which must not be treated as an error.
+	// Explicit `export FOO=bar` in the calling shell always wins over
+	// .env either way (godotenv.Load never overwrites an already-set var).
+	_ = godotenv.Load()
+
 	grpcPort := getEnv("ORCHESTRATOR_GRPC_PORT", "50051")
 	wsPort := getEnv("ORCHESTRATOR_WS_PORT", "8081")
 	wsGatewayBaseURL := getEnv("WS_GATEWAY_BASE_URL", "ws://localhost:8081")
