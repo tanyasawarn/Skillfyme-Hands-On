@@ -1,0 +1,102 @@
+id: lab.cicd.troubleshooting
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Debug a failing CI/CD pipeline
+  summary: Diagnose and fix a broken pipeline stage using its own error output.
+  difficulty_level: L3
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [ci-cd, troubleshooting]
+
+curriculum:
+  primary_topic: topic.devops.cicd-troubleshooting
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: cicd.troubleshooting
+    weight: 1.0
+    primary: true
+    bloom: analyze
+
+prerequisites:
+  hard: [github.actions-workflows]
+  soft: []
+
+objectives:
+  - Read a pipeline's own failure output to locate the broken step
+  - Distinguish a script bug from a missing-dependency failure
+  - Fix the pipeline so it exits 0
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.broken-pipeline-script.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Fix the broken pipeline script
+    required: true
+    instructions_md: |
+      `~/repo/pipeline.sh` is meant to run build → test → deploy but
+      currently fails partway through. Run it, read the error, fix the
+      script, and make it exit 0 end-to-end.
+    validators:
+      - id: v.pipeline-now-passes
+        type: SHELL_ASSERT
+        run: "cd ~/repo && ./pipeline.sh"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        on_fail: "pipeline.sh still exits non-zero. Run it directly and read the error message it prints."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Run `bash -x pipeline.sh` to see exactly which line fails and why."
+      - level: 2
+        penalty: 0.08
+        text: "Check for a typo'd command name or a reference to a file/variable that was never created earlier in the script."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, build_failures, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.80
+      task_completion: 0.10
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.cicd.troubleshooting/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

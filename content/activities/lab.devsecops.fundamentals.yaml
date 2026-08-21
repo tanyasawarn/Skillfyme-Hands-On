@@ -1,0 +1,133 @@
+id: lab.devsecops.fundamentals
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Shift security left with a pre-commit secret scan
+  summary: Add an automated check that blocks committing hardcoded secrets before they reach history.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [devsecops, security, git]
+
+curriculum:
+  primary_topic: topic.devops.devsecops-fundamentals
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: devsecops.fundamentals
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [git.basics]
+  soft: [devops.fundamentals]
+
+objectives:
+  - Explain what "shift-left security" means in a CI/CD pipeline
+  - Write a script that scans staged files for likely secrets
+  - Wire the scan into a Git pre-commit hook
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 30
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.git-repo-empty.v1
+  cost_budget_usd: 0.02
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Write a secret-scanning script
+    required: true
+    instructions_md: |
+      In `~/repo`, write `~/repo/scan-secrets.sh` that exits non-zero if
+      any staged file contains the literal string `AWS_SECRET_ACCESS_KEY`.
+      Make it executable.
+    validators:
+      - id: v.script-exists-executable
+        type: SHELL_ASSERT
+        run: "test -x ~/repo/scan-secrets.sh"
+        expect:
+          exit_code: 0
+        weight: 0.3
+        on_fail: "scan-secrets.sh doesn't exist or isn't executable. `chmod +x` it after creating it."
+      - id: v.script-detects-secret
+        type: SHELL_ASSERT
+        run: "cd ~/repo && echo 'AWS_SECRET_ACCESS_KEY=abc123' > leaked.env && git add leaked.env && ./scan-secrets.sh; test $? -ne 0"
+        expect:
+          exit_code: 0
+        weight: 0.7
+        on_fail: "Your script should exit non-zero when a staged file contains AWS_SECRET_ACCESS_KEY. Test with `git diff --cached | grep AWS_SECRET_ACCESS_KEY`."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`git diff --cached` shows staged changes — grep it for the secret pattern."
+      - level: 2
+        penalty: 0.08
+        text: "Something like: `git diff --cached | grep -q AWS_SECRET_ACCESS_KEY && exit 1 || exit 0`."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Wire the scan into a pre-commit hook
+    required: true
+    instructions_md: |
+      Install `scan-secrets.sh` as `~/repo/.git/hooks/pre-commit` (executable)
+      so it runs automatically before every commit.
+    validators:
+      - id: v.hook-installed
+        type: SHELL_ASSERT
+        run: "test -x ~/repo/.git/hooks/pre-commit"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        on_fail: ".git/hooks/pre-commit doesn't exist or isn't executable yet."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Git looks for an executable file named exactly `pre-commit` in .git/hooks/."
+      - level: 2
+        penalty: 0.05
+        text: "Copy your script there and chmod +x it: `cp scan-secrets.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.devsecops.fundamentals/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

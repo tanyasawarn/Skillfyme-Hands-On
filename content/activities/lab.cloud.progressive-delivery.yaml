@@ -1,0 +1,115 @@
+id: lab.cloud.progressive-delivery
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Run a blue/green deployment switch
+  summary: Deploy a green Deployment alongside blue, then cut over traffic by flipping a Service selector.
+  difficulty_level: L3
+  estimated_minutes: 30
+  locale: en
+  authors: [content-team]
+  tags: [cloud-native, blue-green, progressive-delivery]
+
+curriculum:
+  primary_topic: topic.devops.cloud-progressive-delivery
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: cloud.progressive-delivery
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [cloud.k8s-serverless]
+  soft: [k8s.production-deployments]
+
+objectives:
+  - Deploy two parallel versions labeled blue and green
+  - Cut traffic over by flipping a Service's selector
+  - Verify only the green version receives traffic post-cutover
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 30
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.deployment-blue.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Deploy green and cut traffic over
+    required: true
+    instructions_md: |
+      A Deployment `app-blue` (label `version: blue`) and a Service
+      `app-svc` selecting `version: blue` already exist. Deploy
+      `app-green` with label `version: green`, then flip `app-svc`'s
+      selector to `version: green`.
+    validators:
+      - id: v.green-deployment-exists
+        type: K8S_ASSERT
+        run: "kubectl get deployment app-green -o jsonpath='{.metadata.labels.version}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "green"
+        weight: 0.4
+        on_fail: "Deployment app-green with label version: green doesn't exist."
+      - id: v.service-cutover-to-green
+        type: K8S_ASSERT
+        run: "kubectl get svc app-svc -o jsonpath='{.spec.selector.version}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "green"
+        weight: 0.6
+        on_fail: "app-svc still selects version: blue — the cutover hasn't happened. Patch its selector to version: green."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Blue/green cutover is instantaneous once you deploy green fully and then flip only the Service's selector — no traffic-percentage ramping like canary."
+      - level: 2
+        penalty: 0.08
+        text: "kubectl patch svc app-svc -p '{\"spec\":{\"selector\":{\"version\":\"green\"}}}'."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.cloud.progressive-delivery/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

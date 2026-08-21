@@ -1,0 +1,109 @@
+id: lab.jenkins.advanced-pipelines
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Add retry and environment variables to a pipeline
+  summary: Harden a flaky pipeline stage with a retry block and externalize a hardcoded value.
+  difficulty_level: L3
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [jenkins, advanced, resilience]
+
+curriculum:
+  primary_topic: topic.devops.jenkins-advanced-pipelines
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: jenkins.advanced-pipelines
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [jenkins.distributed-builds]
+  soft: []
+
+objectives:
+  - Wrap a flaky pipeline step in a retry block
+  - Externalize a hardcoded value into an environment variable
+  - Explain why retry alone doesn't fix root causes
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.jenkinsfile-basic.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Add a retry block and an environment variable
+    required: true
+    instructions_md: |
+      In `~/repo/Jenkinsfile`, wrap the Test stage's step in `retry(3) {
+      ... }`, and add a top-level `environment { BUILD_TARGET =
+      'production' }` block instead of hardcoding "production" inline.
+    validators:
+      - id: v.retry-present
+        type: FILE_CONTENT
+        run: "~/repo/Jenkinsfile"
+        expect:
+          contains: "retry(3)"
+        weight: 0.5
+        on_fail: "The Test stage's step should be wrapped in retry(3) { ... }."
+      - id: v.environment-block-present
+        type: FILE_CONTENT
+        run: "~/repo/Jenkinsfile"
+        expect:
+          contains: "BUILD_TARGET = 'production'"
+        weight: 0.5
+        on_fail: "Add a top-level environment { BUILD_TARGET = 'production' } block."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`retry(N) { ... }` re-runs its block up to N times if it fails — useful for flaky network calls, not a substitute for fixing the root cause."
+      - level: 2
+        penalty: 0.06
+        text: "Add `environment { BUILD_TARGET = 'production' }` right after the `agent` declaration."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.jenkins.advanced-pipelines/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

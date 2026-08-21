@@ -1,0 +1,116 @@
+id: lab.cloud.twelve-factor
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Externalize config per the Twelve-Factor App methodology
+  summary: Refactor a hardcoded config value into an environment variable, per Factor III.
+  difficulty_level: L2
+  estimated_minutes: 20
+  locale: en
+  authors: [content-team]
+  tags: [cloud-native, twelve-factor]
+
+curriculum:
+  primary_topic: topic.devops.cloud-twelve-factor
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: cloud.twelve-factor
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [docker.basics]
+  soft: []
+
+objectives:
+  - Identify a hardcoded config value that violates Factor III (Config)
+  - Externalize it as an environment variable instead
+  - Verify the app behaves identically when the env var is overridden
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 20
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.app-hardcoded-config.v1
+  cost_budget_usd: 0.02
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Externalize the hardcoded port
+    required: true
+    instructions_md: |
+      `~/app/server.py` has a hardcoded `PORT = 8080`. Change it to read
+      from the `PORT` environment variable, defaulting to 8080 if unset.
+      Verify running with `PORT=9090` actually changes behavior.
+    validators:
+      - id: v.no-hardcoded-port
+        type: SHELL_ASSERT
+        run: "! grep -qE '^PORT = 8080$' ~/app/server.py"
+        expect:
+          exit_code: 0
+        weight: 0.4
+        on_fail: "server.py still has the literal hardcoded assignment `PORT = 8080`."
+      - id: v.reads-from-env
+        type: FILE_CONTENT
+        run: "~/app/server.py"
+        expect:
+          contains: "os.environ"
+        weight: 0.3
+        on_fail: "server.py should read PORT from os.environ, not a hardcoded literal."
+      - id: v.override-changes-behavior
+        type: SHELL_ASSERT
+        run: "cd ~/app && PORT=9090 python3 -c \"import server; assert server.PORT == 9090\""
+        expect:
+          exit_code: 0
+        weight: 0.3
+        on_fail: "Setting PORT=9090 in the environment should change server.PORT to 9090."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Factor III: config that varies between environments (dev/staging/prod) belongs in env vars, never hardcoded or committed."
+      - level: 2
+        penalty: 0.06
+        text: "PORT = int(os.environ.get('PORT', 8080))"
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.cloud.twelve-factor/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

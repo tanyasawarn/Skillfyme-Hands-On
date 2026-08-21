@@ -1,0 +1,139 @@
+id: lab.k8s.pods
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Author and run a multi-container Pod
+  summary: Write a Pod manifest with two containers sharing a volume, and verify they can communicate.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [kubernetes, pods]
+
+curriculum:
+  primary_topic: topic.devops.k8s.pods
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: k8s.pods
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [k8s.architecture]
+  soft: []
+
+objectives:
+  - Author a Pod manifest with multiple containers
+  - Share an emptyDir volume between containers in the same Pod
+  - Verify the Pod reaches Running state
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Author a two-container Pod manifest
+    required: true
+    instructions_md: |
+      Write `~/pod.yaml` for a Pod named `writer-reader` with two
+      containers sharing an `emptyDir` volume mounted at `/data` in both:
+      one that writes a file to `/data`, one that reads it.
+    validators:
+      - id: v.manifest-exists
+        type: FILE_EXISTS
+        run: "~/pod.yaml"
+        expect:
+          exists: true
+        weight: 0.2
+        on_fail: "~/pod.yaml doesn't exist yet."
+      - id: v.manifest-valid-yaml
+        type: FILE_PARSE
+        run: "~/pod.yaml"
+        expect:
+          format: yaml
+        weight: 0.2
+        on_fail: "pod.yaml isn't valid YAML."
+      - id: v.manifest-has-shared-volume
+        type: FILE_CONTENT
+        run: "~/pod.yaml"
+        expect:
+          contains_all: ["emptyDir", "/data"]
+        weight: 0.6
+        on_fail: "The manifest needs an emptyDir volume mounted at /data in both containers."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Containers in the same Pod can share storage via a Pod-level volumes: list, mounted into each container."
+      - level: 2
+        penalty: 0.08
+        text: "spec.volumes: [{name: shared, emptyDir: {}}], and each container gets volumeMounts: [{name: shared, mountPath: /data}]."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Apply the manifest and reach Running
+    required: true
+    instructions_md: |
+      Apply `~/pod.yaml` to the cluster and wait for the Pod to reach
+      `Running` state.
+    validators:
+      - id: v.pod-running
+        type: K8S_ASSERT
+        run: "kubectl get pod writer-reader -o jsonpath='{.status.phase}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "Running"
+        weight: 1.0
+        on_fail: "writer-reader isn't Running yet. Check `kubectl describe pod writer-reader` for the reason."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`kubectl apply -f pod.yaml` creates the Pod from your manifest."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.k8s.pods/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

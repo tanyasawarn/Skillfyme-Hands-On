@@ -1,0 +1,29 @@
+id: f.k8s.rollout-stuck-bad-image-tag
+version: 1
+title: Rolling update stuck on a nonexistent image tag
+summary: A deploy references an image tag that was never actually pushed, so the rollout stalls with new pods failing to pull.
+
+targets: [k8s.deployment]
+symptom_class: RolloutStuck
+skills_probed: [k8s.production-deployments, k8s.troubleshooting]
+
+canonical_diagnostic_path:
+  - "kubectl rollout status → hangs, never completes"
+  - "kubectl get pods → see new ReplicaSet's pods in ImagePullBackOff"
+  - "kubectl describe pod → confirm the tag doesn't exist in the registry"
+  - "kubectl rollout history → identify the bad revision"
+
+expected_fix_class: [rollout_undo, fix_and_redeploy_correct_tag]
+detectability: high
+mean_time_to_diagnose_minutes: 5
+
+params_schema:
+  deployment:
+    type: string
+    description: Name of the target Deployment.
+  bad_tag:
+    type: string
+    description: The nonexistent image tag to inject.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

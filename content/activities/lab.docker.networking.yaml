@@ -1,0 +1,131 @@
+id: lab.docker.networking
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Create a custom Docker bridge network
+  summary: Isolate two containers on their own bridge network and verify they can reach each other by name.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [docker, networking]
+
+curriculum:
+  primary_topic: topic.devops.docker-networking
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: docker.networking
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [docker.basics]
+  soft: []
+
+objectives:
+  - Create a user-defined bridge network
+  - Attach containers to it instead of the default bridge
+  - Verify container-to-container DNS resolution by name
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.docker.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  cost_budget_usd: 0.03
+
+surfaces: [terminal]
+
+tasks:
+  - key: t1
+    title: Create an isolated bridge network
+    required: true
+    instructions_md: |
+      Create a Docker network named `app-net` using the bridge driver.
+    validators:
+      - id: v.network-exists
+        type: SHELL_ASSERT
+        run: "docker network inspect app-net --format '{{.Driver}}'"
+        expect:
+          exit_code: 0
+          stdout_contains: "bridge"
+        weight: 1.0
+        on_fail: "No bridge network named app-net found. Run `docker network create app-net`."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`docker network create` defaults to the bridge driver."
+      - level: 2
+        penalty: 0.05
+        text: "Run `docker network create app-net`."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Verify name-based DNS between containers
+    required: true
+    instructions_md: |
+      Start two containers on `app-net`: one named `server` running
+      `httpd:alpine`, and one named `client` that can resolve and reach
+      `server` by name over that network.
+    validators:
+      - id: v.both-containers-on-network
+        type: SHELL_ASSERT
+        run: "docker network inspect app-net --format '{{len .Containers}}' | grep -q '^2$'"
+        expect:
+          exit_code: 0
+        weight: 0.4
+        on_fail: "Expected exactly 2 containers attached to app-net."
+      - id: v.client-can-resolve-server
+        type: SHELL_ASSERT
+        run: "docker exec client getent hosts server"
+        expect:
+          exit_code: 0
+        weight: 0.6
+        on_fail: "The client container can't resolve 'server' by name. Both containers must be on the same user-defined network (--network app-net)."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "User-defined bridge networks give containers automatic DNS resolution by --name; the default bridge network does not."
+      - level: 2
+        penalty: 0.08
+        text: "docker run -d --name server --network app-net httpd:alpine, then docker run -d --name client --network app-net alpine sleep infinity."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.docker.networking/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

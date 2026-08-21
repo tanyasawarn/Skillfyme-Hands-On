@@ -1,0 +1,29 @@
+id: f.k8s.pvc-storageclass-missing
+version: 1
+title: PVC references a StorageClass that doesn't exist
+summary: A PersistentVolumeClaim requests a StorageClass that was renamed or removed, leaving the claim permanently Pending.
+
+targets: [k8s.storage]
+symptom_class: PVCPending
+skills_probed: [k8s.storage, k8s.troubleshooting]
+
+canonical_diagnostic_path:
+  - "kubectl get pvc → notice STATUS stuck at Pending"
+  - "kubectl describe pvc → see 'storageclass.storage.k8s.io not found'"
+  - "kubectl get storageclass → confirm the referenced class doesn't exist"
+  - "kubectl get pvc -o yaml → inspect spec.storageClassName"
+
+expected_fix_class: [fix_storageclass_name, create_missing_storageclass]
+detectability: high
+mean_time_to_diagnose_minutes: 6
+
+params_schema:
+  pvc:
+    type: string
+    description: Name of the target PersistentVolumeClaim.
+  wrong_storage_class:
+    type: string
+    description: The nonexistent StorageClass name to inject.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

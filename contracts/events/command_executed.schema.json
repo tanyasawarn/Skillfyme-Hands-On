@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.practiceengine.internal/events/command_executed.schema.json",
+  "title": "CommandExecutedPayload",
+  "description": "Doc §4.2 Execution category. Produced by Dev A's Session Broker telemetry tap (PROMPT_COMMAND shell hook, orchestrator/internal/sessionbroker). Integration point #2b in PLAN.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["cmd", "exit_code", "duration_ms"],
+  "properties": {
+    "cmd": { "type": "string" },
+    "cwd": { "type": "string", "description": "not yet emitted by the Phase 1 shell hook (orchestrator/internal/sessionbroker/telemetry_tap.go); optional until that capability is added" },
+    "exit_code": { "type": "integer" },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "cmd_hash": { "type": "string", "description": "sha256 of cmd, for cheap equality/dedup checks without re-hashing the string client-side" },
+    "source": { "type": "string", "enum": ["web_terminal", "audit_hook"], "description": "which capture path produced this; divergence between the two is an integrity signal, doc §4.2" }
+  }
+}

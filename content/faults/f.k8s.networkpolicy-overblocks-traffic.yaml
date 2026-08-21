@@ -1,0 +1,28 @@
+id: f.k8s.networkpolicy-overblocks-traffic
+version: 1
+title: Default-deny NetworkPolicy blocks a legitimate dependency the allow-list forgot
+summary: A zero-trust default-deny NetworkPolicy was applied, but the accompanying allow-rule forgot one legitimate service-to-service dependency.
+
+targets: [k8s.networkpolicy]
+symptom_class: ConnectionTimeout
+skills_probed: [cloud.zero-trust-security, k8s.troubleshooting]
+
+canonical_diagnostic_path:
+  - "curl from the blocked source → times out, not refused (default-deny signature)"
+  - "kubectl get networkpolicy -o yaml → inspect the allow rule's podSelector/ports"
+  - "compare the source pod's labels against what the allow rule actually matches"
+
+expected_fix_class: [add_missing_allow_rule, fix_podselector_labels]
+detectability: medium
+mean_time_to_diagnose_minutes: 10
+
+params_schema:
+  namespace:
+    type: string
+    description: Target namespace with the default-deny policy.
+  missing_dependency:
+    type: string
+    description: The service dependency the allow-list should omit.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

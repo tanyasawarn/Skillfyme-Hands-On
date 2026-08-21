@@ -1,0 +1,117 @@
+id: lab.microservices.fundamentals
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Split a monolith config into bounded-context services
+  summary: Decompose a single configuration file into independent, bounded-context service definitions.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [microservices, architecture]
+
+curriculum:
+  primary_topic: topic.devops.microservices-fundamentals
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: microservices.fundamentals
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [linux.cli]
+  soft: [iac.fundamentals]
+
+objectives:
+  - Identify bounded contexts within a monolithic configuration
+  - Split shared configuration into independently owned service files
+  - Avoid leaking one service's implementation details into another
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 30
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.monolith-config.v1
+  cost_budget_usd: 0.02
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Extract the users service definition
+    required: true
+    instructions_md: |
+      `~/app/monolith.json` describes a single app with `users` and
+      `orders` sections sharing one database config. Create
+      `~/app/users-service.json` containing only the `users` section's
+      fields (`name`, `port`, `db_table`), as its own top-level object.
+    validators:
+      - id: v.users-service-exists
+        type: FILE_EXISTS
+        run: "~/app/users-service.json"
+        expect:
+          exists: true
+        weight: 0.2
+        on_fail: "~/app/users-service.json doesn't exist yet."
+      - id: v.users-service-valid-json
+        type: FILE_PARSE
+        run: "~/app/users-service.json"
+        expect:
+          format: json
+        weight: 0.3
+        on_fail: "users-service.json isn't valid JSON."
+      - id: v.users-service-no-orders-leak
+        type: SHELL_ASSERT
+        run: "! grep -q orders ~/app/users-service.json"
+        expect:
+          exit_code: 0
+        weight: 0.5
+        on_fail: "users-service.json should only describe the users bounded context — it shouldn't reference orders at all."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "A bounded context owns its own data and config — it shouldn't know about a sibling service's internals."
+      - level: 2
+        penalty: 0.06
+        text: "Copy just the users object's fields (name, port, db_table) into a new top-level JSON object."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.microservices.fundamentals/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

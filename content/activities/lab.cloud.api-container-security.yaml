@@ -1,0 +1,113 @@
+id: lab.cloud.api-container-security
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Audit a cluster for insecure pod configurations
+  summary: Scan running workloads for privileged containers and host-namespace access, then fix them.
+  difficulty_level: L3
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [security, kubernetes, auditing]
+
+curriculum:
+  primary_topic: topic.devops.cloud-api-container-security
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: cloud.api-container-security
+    weight: 1.0
+    primary: true
+    bloom: analyze
+
+prerequisites:
+  hard: [cloud.mtls-spiffe]
+  soft: []
+
+objectives:
+  - Query the cluster for pods running as privileged
+  - Query the cluster for pods using the host network namespace
+  - Remediate a misconfigured pod so it passes both checks
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.pod-privileged-insecure.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Audit and fix an insecure pod
+    required: true
+    instructions_md: |
+      A pod named `insecure-app` runs privileged and with hostNetwork.
+      Edit its manifest to remove both, then reapply.
+    validators:
+      - id: v.not-privileged
+        type: K8S_ASSERT
+        run: "kubectl get pod insecure-app -o jsonpath='{.spec.containers[0].securityContext.privileged}'"
+        expect:
+          jsonpath: "$"
+          op: "ne"
+          value: true
+        weight: 0.5
+        on_fail: "insecure-app's container is still running privileged: true."
+      - id: v.not-host-network
+        type: K8S_ASSERT
+        run: "kubectl get pod insecure-app -o jsonpath='{.spec.hostNetwork}'"
+        expect:
+          jsonpath: "$"
+          op: "ne"
+          value: true
+        weight: 0.5
+        on_fail: "insecure-app still has hostNetwork: true — it shares the node's network namespace instead of getting its own."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Both privileged containers and hostNetwork give a compromised pod a direct path to the underlying node — neither should be needed for an ordinary app."
+      - level: 2
+        penalty: 0.06
+        text: "Remove or set to false: spec.containers[].securityContext.privileged and spec.hostNetwork. Then `kubectl apply` again (or delete + recreate, since some fields are immutable)."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.80
+      task_completion: 0.10
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.cloud.api-container-security/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

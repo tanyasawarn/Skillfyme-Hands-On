@@ -1,0 +1,130 @@
+id: lab.k8s.production-deployments
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Perform a rolling update with zero downtime
+  summary: Update a Deployment's image using a rolling strategy and verify no downtime occurred.
+  difficulty_level: L3
+  estimated_minutes: 30
+  locale: en
+  authors: [content-team]
+  tags: [kubernetes, deployments, production]
+
+curriculum:
+  primary_topic: topic.devops.k8s.production-deployments
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: k8s.production-deployments
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [k8s.resource-management]
+  soft: []
+
+objectives:
+  - Configure a rollingUpdate strategy with maxUnavailable and maxSurge
+  - Trigger an image update and observe the rollout progress
+  - Roll back to the previous revision on demand
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 30
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.deployment-web.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Configure a rolling update strategy
+    required: true
+    instructions_md: |
+      Patch the existing `web` Deployment's strategy to
+      `rollingUpdate: {maxUnavailable: 0, maxSurge: 1}`.
+    validators:
+      - id: v.strategy-set
+        type: K8S_ASSERT
+        run: "kubectl get deployment web -o jsonpath='{.spec.strategy.rollingUpdate.maxUnavailable}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "0"
+        weight: 1.0
+        on_fail: "web's rollingUpdate.maxUnavailable isn't set to 0. Zero-downtime requires never dropping below the current replica count."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`kubectl patch deployment web -p '{\"spec\":{\"strategy\":{\"rollingUpdate\":{\"maxUnavailable\":0,\"maxSurge\":1}}}}'`."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Roll out a new image and roll back
+    required: true
+    instructions_md: |
+      Update `web`'s container image to trigger a rollout. Once it
+      completes, roll back to the previous revision using
+      `kubectl rollout undo`.
+    validators:
+      - id: v.rollout-history-has-entries
+        type: SHELL_ASSERT
+        run: "kubectl rollout history deployment/web | grep -qE 'REVISION|revision'"
+        expect:
+          exit_code: 0
+        weight: 0.4
+        on_fail: "No rollout history found for web — did an image update actually happen?"
+      - id: v.rollout-complete-after-undo
+        type: SHELL_ASSERT
+        run: "kubectl rollout status deployment/web --timeout=30s"
+        expect:
+          exit_code: 0
+        weight: 0.6
+        on_fail: "The rollback rollout isn't complete/stable. Check `kubectl rollout status deployment/web`."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`kubectl set image deployment/web <container>=<new-image>` triggers a rollout; `kubectl rollout undo deployment/web` reverts it."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 9000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.k8s.production-deployments/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

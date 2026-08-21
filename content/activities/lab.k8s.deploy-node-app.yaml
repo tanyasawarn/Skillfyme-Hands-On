@@ -1,0 +1,152 @@
+# Doc §3.2 worked example, transcribed as the first real content-as-code
+# fixture (D4). Scope reduced to Phase 1 (T1 tier only, no k8s_dashboard
+# multi-node needs beyond what a single-node blueprint provides).
+id: lab.k8s.deploy-node-app
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Deploy a Node.js application to Kubernetes
+  summary: Build, push and expose a containerised Node service on a K8s cluster.
+  difficulty_level: L2
+  estimated_minutes: 35
+  locale: en
+  authors: [content-team]
+  tags: [kubernetes, deployments, containers]
+
+curriculum:
+  primary_topic: topic.devops.k8s.deployments
+  also_relevant: [topic.cloud.container-orchestration]
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: k8s.deployments
+    weight: 0.45
+    primary: true
+    bloom: apply
+  - skill: k8s.architecture
+    weight: 0.20
+    primary: false
+    bloom: apply
+  - skill: k8s.pods
+    weight: 0.20
+    primary: false
+    bloom: apply
+  - skill: k8s.services
+    weight: 0.15
+    primary: false
+    bloom: understand
+
+prerequisites:
+  hard: [docker.basics, linux.cli]
+  soft: [k8s.architecture]
+
+objectives:
+  - Build a container image from an application repo
+  - Author a Deployment manifest with correct probes and resources
+  - Expose the workload and verify external reachability
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "2"
+    memory: 4Gi
+    disk: 10Gi
+  ttl_minutes: 90
+  idle_timeout_minutes: 15
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.node-app-repo.v1
+    - fixture: fx.k3s-ready.v1
+  cost_budget_usd: 0.08
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Build the container image
+    required: true
+    instructions_md: |
+      The application source is in /workspace/app. Build an image tagged
+      `node-app:v1`. Keep the final image under 300 MB.
+    validators:
+      - id: v.image-exists
+        type: SHELL_ASSERT
+        run: "docker image inspect node-app:v1"
+        expect:
+          exit_code: 0
+        weight: 0.6
+        on_fail: "No image tagged node-app:v1 was found. `docker images` lists what you have built."
+      - id: v.image-size
+        type: SHELL_JSON
+        run: "docker image inspect node-app:v1 --format '{{.Size}}'"
+        expect:
+          jsonpath: "$"
+          op: "lt"
+          value: 314572800
+        weight: 0.4
+        severity: WARN
+        on_fail: "The image built successfully but is over 300MB — consider a smaller base image or a multi-stage build."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Docker needs a Dockerfile and a build context."
+      - level: 2
+        penalty: 0.05
+        text: "The -t flag tags an image at build time."
+      - level: 3
+        penalty: 0.12
+        text: "Run `docker build -t node-app:v1 .` from /workspace/app."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, build_failures, time_to_first_success]
+
+  - key: t2
+    title: Push the image to the cluster registry
+    required: true
+    instructions_md: |
+      Tag and push `node-app:v1` to the in-cluster registry at
+      `registry.local:5000/node-app:v1`.
+    validators:
+      - id: v.image-pushed
+        type: SHELL_ASSERT
+        run: "curl -sf registry.local:5000/v2/node-app/tags/list"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        on_fail: "The registry doesn't see a node-app repository yet. Did the push complete without error?"
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Tag the image for the target registry before pushing: docker tag <src> <registry>/<name>:<tag>."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 8
+  token_budget: 12000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.k8s.deploy-node-app/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

@@ -1,0 +1,94 @@
+# Doc §9.2: "an explicit-allow egress proxy per environment... Squid/Envoy."
+# M1.10.
+#
+# This is the platform-namespace Squid deployment that every learner
+# namespace's NetworkPolicy is allowed to reach (see
+# egress-allow-to-proxy.yaml, applied per-namespace alongside the
+# default-deny policy in internal/k8s/provision.go). Squid runs once,
+# shared across all learner environments -- doc §5.2's diagram places it
+# under "Shared infra (platform namespace, NOT learner-reachable)".
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: practiceengine-platform
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: egress-proxy-config
+  namespace: practiceengine-platform
+data:
+  squid.conf: |
+    http_port 3128
+
+    # Doc §9.2 default allowlist: "platform registry, package mirrors,
+    # and the cloud API endpoints relevant to the tier." Phase 1 (T1,
+    # DevOps-track guided labs) needs package managers and the container
+    # registry; no cloud API endpoints yet (that's T3, Phase 3).
+    acl allowed_domains dstdomain .docker.io
+    acl allowed_domains dstdomain .docker.com
+    acl allowed_domains dstdomain registry-1.docker.io
+    acl allowed_domains dstdomain production.cloudflare.docker.com
+    acl allowed_domains dstdomain .ubuntu.com
+    acl allowed_domains dstdomain .debian.org
+    acl allowed_domains dstdomain .npmjs.org
+    acl allowed_domains dstdomain registry.npmjs.org
+    acl allowed_domains dstdomain .pypi.org
+    acl allowed_domains dstdomain files.pythonhosted.org
+    acl allowed_domains dstdomain .github.com
+    acl allowed_domains dstdomain raw.githubusercontent.com
+    acl allowed_domains dstdomain objects.githubusercontent.com
+
+    acl SSL_ports port 443
+    acl Safe_ports port 80
+    acl Safe_ports port 443
+    acl CONNECT method CONNECT
+
+    # Doc §9.2: "All other egress is denied with a helpful error injected
+    # into the learner's terminal." Squid's own deny_info gives a
+    # same-spirit error page for HTTP; the injected-into-terminal version
+    # (richer, shell-visible) needs a wrapper script in the base image
+    # that greps for this deny response and reprints it -- doc-described
+    # UX polish not implemented in this Phase 1 slice; the blocking
+    # itself is real and enforced regardless.
+    http_access deny !Safe_ports
+    http_access deny CONNECT !SSL_ports
+    http_access allow allowed_domains
+    http_access deny all
+
+    # Doc §9.2: "Cache aggressively at the mirror -- this both cuts
+    # egress cost meaningfully and speeds up every environment."
+    cache_dir ufs /var/spool/squid 1000 16 256
+    maximum_object_size 512 MB
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: egress-proxy
+  namespace: practiceengine-platform
+spec:
+  replicas: 2 # doc's "Shared infra" is platform-critical; every learner env depends on it for all package installs
+  selector:
+    matchLabels: {app: egress-proxy}
+  template:
+    metadata:
+      labels: {app: egress-proxy}
+    spec:
+      containers:
+        - name: squid
+          image: docker.io/ubuntu/squid:latest # real published image (Canonical's official Squid build), corrected after a real ImagePullBackOff caught "ubuntu/squid" (invalid path) on first deploy
+          ports: [{containerPort: 3128}]
+          volumeMounts:
+            - {name: config, mountPath: /etc/squid/squid.conf, subPath: squid.conf}
+      volumes:
+        - name: config
+          configMap: {name: egress-proxy-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: egress-proxy
+  namespace: practiceengine-platform
+spec:
+  selector: {app: egress-proxy}
+  ports: [{port: 3128, targetPort: 3128}]

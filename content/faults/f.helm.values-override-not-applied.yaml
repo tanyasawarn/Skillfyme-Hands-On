@@ -1,0 +1,28 @@
+id: f.helm.values-override-not-applied
+version: 1
+title: A Helm upgrade's --set override is silently ignored due to key-path typo
+summary: An operator runs helm upgrade with a --set override meant to fix a config, but a typo'd key path means the chart's default value is used instead, with no error.
+
+targets: [helm.release]
+symptom_class: ConfigNotApplied
+skills_probed: [k8s.helm]
+
+canonical_diagnostic_path:
+  - "confirm the app is still using the old/default value after the upgrade"
+  - "helm get values <release> → check what values were actually recorded"
+  - "compare the --set key path against the chart's actual values.yaml structure"
+
+expected_fix_class: [fix_set_key_path, use_values_file_instead]
+detectability: low
+mean_time_to_diagnose_minutes: 9
+
+params_schema:
+  release:
+    type: string
+    description: Name of the target Helm release.
+  wrong_key_path:
+    type: string
+    description: The mistyped --set key path to simulate.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

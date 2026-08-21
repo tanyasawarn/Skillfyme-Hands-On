@@ -1,0 +1,183 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Doc §3.5's content-CI concept ("lint -> provision -> golden path ->
+# null path -> flake -> timing -> cost") only has its lint step covered
+# here -- the rest (scripts/content-ci.ts) needs a real k3s cluster and
+# a live orchestrator process, which this workflow doesn't provision.
+# That harness is meant to run against a real dev/staging cluster, not
+# GitHub Actions' hosted runners; see scripts/content-ci.ts's own doc
+# comment for how to invoke it manually.
+jobs:
+  practice-core:
+    name: practice-core (build, lint, unit + integration tests)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: practice
+          POSTGRES_PASSWORD: practice
+          POSTGRES_DB: practice_engine
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U practice"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      nats:
+        image: nats:2
+        ports: ['4222:4222']
+    env:
+      DATABASE_URL: postgres://practice:practice@localhost:5432/practice_engine
+      REDIS_URL: redis://localhost:6379
+      NATS_URL: nats://localhost:4222
+      JWT_SECRET: ci-only-test-secret-not-used-in-any-real-deployment
+      USE_FAKE_ORCHESTRATOR: 'true'
+    defaults:
+      run:
+        working-directory: practice-core
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: practice-core/package-lock.json
+
+      - run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      # Non-blocking: the codebase has ~68 pre-existing lint issues
+      # (mostly @typescript-eslint/no-unsafe-* on `any`-typed gRPC
+      # response handling in files this CI setup didn't touch) that
+      # would red the very first run on debt unrelated to whatever PR
+      # triggered it. Runs for visibility now; flip to a hard failure
+      # once that backlog is cleaned up separately.
+      - name: Lint (report only, not yet enforced)
+        run: npm run lint || true
+
+      - name: Apply migrations
+        run: |
+          for f in db/migrations/*.sql; do
+            echo "applying $f"
+            PGPASSWORD=practice psql -h localhost -U practice -d practice_engine -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: Unit tests
+        run: npm test -- --ci
+
+      # test-db.ts's truncateAll() (test/test-db.ts) wipes every table this
+      # suite touches between spec files, run against the CI Postgres
+      # service container above -- disposable per job run, so there's no
+      # local demo data to preserve or reseed afterward, unlike
+      # scripts/reseed-demo.sh's local-dev equivalent.
+      - name: Integration tests
+        run: npm run test:integration -- --ci
+
+  orchestrator:
+    name: orchestrator (build, vet, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: orchestrator
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: orchestrator/go.mod
+          cache-dependency-path: orchestrator/go.sum
+
+      - run: go build ./...
+      - run: go vet ./...
+      - run: gofmt -l . | tee /tmp/gofmt-out.txt && test ! -s /tmp/gofmt-out.txt
+      - run: go test ./...
+
+  web:
+    name: web (type-check, lint, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run lint
+
+      # NEXT_PUBLIC_API_BASE_URL isn't read at build time by anything that
+      # would fail the build without it (only at request time, client-side)
+      # -- a production deployment sets it as a real env var at build/run
+      # time; CI's build step doesn't need a live backend to succeed.
+      - run: npm run build
+
+  content-lint:
+    name: content (lint activities + faults)
+    runs-on: ubuntu-latest
+    needs: practice-core # reuses the same schema; cheaper than starting a second Postgres service
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: practice
+          POSTGRES_PASSWORD: practice
+          POSTGRES_DB: practice_engine
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U practice"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://practice:practice@localhost:5432/practice_engine
+    defaults:
+      run:
+        working-directory: practice-core
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: practice-core/package-lock.json
+
+      - run: npm ci
+
+      - name: Apply migrations
+        run: |
+          for f in db/migrations/*.sql; do
+            PGPASSWORD=practice psql -h localhost -U practice -d practice_engine -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      # lint-content.ts/lint-faults.ts both check skills_probed / skill
+      # slugs against skill.skill -- need the real skill graph seeded, not
+      # just an empty schema, or every activity/fault would fail with
+      # "unknown skill slug" false positives.
+      - run: npx ts-node -r tsconfig-paths/register scripts/seed-skills.ts
+      - run: npx ts-node -r tsconfig-paths/register scripts/seed-skills-genai.ts
+      - run: npx ts-node -r tsconfig-paths/register scripts/lint-content.ts
+      - run: npx ts-node -r tsconfig-paths/register scripts/lint-faults.ts

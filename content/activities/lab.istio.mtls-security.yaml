@@ -1,0 +1,104 @@
+id: lab.istio.mtls-security
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Enforce strict mTLS between services with Istio
+  summary: Apply a PeerAuthentication policy requiring mutual TLS for all in-mesh traffic.
+  difficulty_level: L4
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [istio, mtls, security]
+
+curriculum:
+  primary_topic: topic.devops.istio-mtls-security
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: istio.mtls-security
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [istio.traffic-management]
+  soft: []
+
+objectives:
+  - Author a PeerAuthentication policy in STRICT mTLS mode
+  - Verify plaintext traffic between mesh services is now rejected
+  - Explain why mTLS is a foundational zero-trust control, not optional hardening
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 2Gi
+    disk: 4Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.istio-installed.v1
+  cost_budget_usd: 0.04
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Enforce strict mTLS mesh-wide
+    required: true
+    instructions_md: |
+      Author a PeerAuthentication resource in the `istio-system` namespace
+      named `default` setting `mtls.mode: STRICT` for the whole mesh.
+    validators:
+      - id: v.peerauth-strict
+        type: K8S_ASSERT
+        run: "kubectl get peerauthentication default -n istio-system -o jsonpath='{.spec.mtls.mode}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "STRICT"
+        weight: 1.0
+        on_fail: "PeerAuthentication default in istio-system doesn't have mtls.mode: STRICT set."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "A mesh-wide PeerAuthentication must be named `default` and live in the root namespace (istio-system)."
+      - level: 2
+        penalty: 0.06
+        text: "spec: {mtls: {mode: STRICT}} with no selector, at the istio-system scope."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.80
+      task_completion: 0.10
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 5
+  token_budget: 7000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.istio.mtls-security/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

@@ -1,0 +1,117 @@
+id: lab.jenkins.security-integration
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Add a security gate to a Jenkinsfile
+  summary: Insert a blocking static-analysis stage that fails the pipeline on a security finding.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [jenkins, security, ci-cd]
+
+curriculum:
+  primary_topic: topic.devops.jenkins-security-integration
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: jenkins.security-integration
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [jenkins.pipeline-as-code]
+  soft: [devsecops.fundamentals]
+
+objectives:
+  - Add a dedicated security-scan stage to a pipeline
+  - Make the security stage block the pipeline on a finding
+  - Order the security gate before the deploy stage
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.jenkinsfile-basic.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Add a blocking security scan stage
+    required: true
+    instructions_md: |
+      `~/repo/Jenkinsfile` has Build, Test, Deploy stages. Add a
+      `Security Scan` stage between Test and Deploy that runs
+      `~/repo/scan.sh` (already provided) and fails the pipeline if it
+      exits non-zero.
+    validators:
+      - id: v.security-stage-present
+        type: FILE_CONTENT
+        run: "~/repo/Jenkinsfile"
+        expect:
+          contains: "Security Scan"
+        weight: 0.3
+        on_fail: "Jenkinsfile doesn't have a stage named 'Security Scan' yet."
+      - id: v.security-stage-runs-scan
+        type: FILE_CONTENT
+        run: "~/repo/Jenkinsfile"
+        expect:
+          contains: "scan.sh"
+        weight: 0.3
+        on_fail: "The Security Scan stage should call scan.sh."
+      - id: v.security-stage-before-deploy
+        type: SHELL_ASSERT
+        run: "awk '/Security Scan/{print NR; exit}' ~/repo/Jenkinsfile > /tmp/s.txt; awk '/stage\\(.Deploy./{print NR; exit}' ~/repo/Jenkinsfile > /tmp/d.txt; [ -s /tmp/s.txt ] && [ -s /tmp/d.txt ] && [ \"$(cat /tmp/s.txt)\" -lt \"$(cat /tmp/d.txt)\" ]"
+        expect:
+          exit_code: 0
+        weight: 0.4
+        on_fail: "The Security Scan stage must come before Deploy — a shift-left gate that runs after deploy doesn't block anything."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "A security gate only works if it runs before the risky action (deploy), not after."
+      - level: 2
+        penalty: 0.08
+        text: "Insert a new stage('Security Scan') { steps { sh './scan.sh' } } block between the Test and Deploy stages."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.jenkins.security-integration/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

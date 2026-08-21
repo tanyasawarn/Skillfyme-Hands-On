@@ -1,0 +1,28 @@
+id: f.jenkins.stale-cached-dependency
+version: 1
+title: Jenkins build cache serves a stale dependency after a version bump
+summary: A dependency version was bumped in source, but the pipeline's build cache still serves the old artifact, causing a subtle test failure downstream.
+
+targets: [jenkins.pipeline]
+symptom_class: UnexpectedTestFailure
+skills_probed: [jenkins.pipeline-as-code, cicd.troubleshooting]
+
+canonical_diagnostic_path:
+  - "check failing test output → mismatched behavior vs. the version in source"
+  - "check the build step's dependency resolution log → confirm the old version was actually used"
+  - "check the pipeline's cache configuration/key → identify why it wasn't invalidated"
+
+expected_fix_class: [invalidate_cache_key, force_clean_build]
+detectability: low
+mean_time_to_diagnose_minutes: 15
+
+params_schema:
+  job:
+    type: string
+    description: Name of the target Jenkins job.
+  stale_dependency:
+    type: string
+    description: The dependency whose cached version should be stale.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

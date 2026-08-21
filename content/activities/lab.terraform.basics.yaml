@@ -1,0 +1,143 @@
+id: lab.terraform.basics
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Provision a local resource with Terraform
+  summary: Write a Terraform config using the local provider and apply it to create a real file.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [terraform, iac]
+
+curriculum:
+  primary_topic: topic.devops.terraform-basics
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: terraform.basics
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [ansible.basics]
+  soft: []
+
+objectives:
+  - Write a Terraform config with a provider, resource, and variable
+  - Run terraform init and terraform apply
+  - Verify the resource was actually created
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  cost_budget_usd: 0.02
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Write and apply a local_file resource
+    required: true
+    instructions_md: |
+      In `~/infra`, write `main.tf` using the `local` provider to create a
+      `local_file` resource at `/tmp/terraform-demo.txt` with content
+      `"hello from terraform"`, parameterized via a variable for the
+      content.
+    validators:
+      - id: v.main-tf-exists
+        type: FILE_EXISTS
+        run: "~/infra/main.tf"
+        expect:
+          exists: true
+        weight: 0.15
+        on_fail: "~/infra/main.tf doesn't exist yet."
+      - id: v.uses-variable
+        type: FILE_CONTENT
+        run: "~/infra/main.tf"
+        expect:
+          contains: "variable"
+        weight: 0.15
+        on_fail: "main.tf should declare a variable block for the file content, not hardcode it directly in the resource."
+      - id: v.terraform-applied-file-exists
+        type: FILE_EXISTS
+        run: "/tmp/terraform-demo.txt"
+        expect:
+          exists: true
+        weight: 0.4
+        on_fail: "/tmp/terraform-demo.txt doesn't exist — did `terraform apply` actually run?"
+      - id: v.file-content-correct
+        type: FILE_CONTENT
+        run: "/tmp/terraform-demo.txt"
+        expect:
+          contains: "hello from terraform"
+        weight: 0.3
+        on_fail: "The applied file's content doesn't match \"hello from terraform\"."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "The local provider's local_file resource writes a file to disk as declared infrastructure — a good way to practice Terraform without needing a real cloud account."
+      - level: 2
+        penalty: 0.08
+        text: "provider \"local\" {}; variable \"content\" { default = \"hello from terraform\" }; resource \"local_file\" \"demo\" { filename = \"/tmp/terraform-demo.txt\", content = var.content }."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Init and apply
+    required: true
+    instructions_md: |
+      Run `terraform init` then `terraform apply -auto-approve` from
+      `~/infra`.
+    validators:
+      - id: v.state-file-exists
+        type: FILE_EXISTS
+        run: "~/infra/terraform.tfstate"
+        expect:
+          exists: true
+        weight: 1.0
+        on_fail: "No terraform.tfstate found in ~/infra — did apply complete successfully?"
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "terraform init downloads providers; terraform apply -auto-approve applies without an interactive prompt."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 9000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.terraform.basics/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

@@ -1,0 +1,29 @@
+id: f.elk.logstash-pipeline-blocked
+version: 1
+title: Logstash pipeline is blocked by a downstream Elasticsearch mapping conflict
+summary: A field's type changed in incoming logs, causing an Elasticsearch mapping conflict that backs up the entire Logstash pipeline -- not just drops the bad documents.
+
+targets: [elk.logstash]
+symptom_class: LogIngestionStalled
+skills_probed: [observability.elk-basics]
+
+canonical_diagnostic_path:
+  - "check dashboards → notice logs stopped arriving entirely, not just for one source"
+  - "check Logstash pipeline stats API → confirm events queued but not flushing"
+  - "check Logstash logs → see Elasticsearch 'mapper_parsing_exception'"
+  - "check the conflicting field's mapping in the target index"
+
+expected_fix_class: [fix_field_type_conflict, roll_new_index_with_correct_mapping]
+detectability: medium
+mean_time_to_diagnose_minutes: 14
+
+params_schema:
+  index:
+    type: string
+    description: Name of the target Elasticsearch index.
+  conflicting_field:
+    type: string
+    description: The field whose type should conflict with the existing mapping.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

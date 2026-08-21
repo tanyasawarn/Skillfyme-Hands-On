@@ -1,0 +1,25 @@
+id: f.cloud.iam-overpermissive-role
+version: 1
+title: A workload's IAM role has wildcard permissions instead of least privilege
+summary: A service was granted a broad wildcard IAM policy to "make it work" during initial setup, and it was never tightened -- a security-audit-class fault rather than an outage.
+
+targets: [cloud.iam]
+symptom_class: SecurityFindingOverPermissive
+skills_probed: [cloud.zero-trust-security, cloud.api-container-security]
+
+canonical_diagnostic_path:
+  - "run a policy/permissions audit → flag the wildcard resource/action"
+  - "check IAM policy document attached to the workload's role"
+  - "identify the minimal actual actions the workload uses (from logs/access advisor)"
+
+expected_fix_class: [scope_policy_to_least_privilege, split_into_purpose_specific_roles]
+detectability: low
+mean_time_to_diagnose_minutes: 15
+
+params_schema:
+  role_name:
+    type: string
+    description: Name of the target IAM role.
+
+reversible: true
+min_tier: T2_ISOLATED_MICROVM

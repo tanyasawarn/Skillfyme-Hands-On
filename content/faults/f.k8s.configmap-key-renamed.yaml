@@ -1,0 +1,33 @@
+id: f.k8s.configmap-key-renamed
+version: 1
+title: ConfigMap key renamed, breaking a dependent env var reference
+summary: A ConfigMap key an app depends on was silently renamed, so the pod's env var reference no longer resolves.
+
+targets: [k8s.configmap]
+symptom_class: CreateContainerConfigError
+skills_probed: [k8s.config-secrets, k8s.troubleshooting]
+
+canonical_diagnostic_path:
+  - "kubectl get pods → notice CreateContainerConfigError status"
+  - "kubectl describe pod → see 'couldn't find key X in ConfigMap Y'"
+  - "kubectl get configmap -o yaml → inspect actual keys present"
+  - "kubectl get deploy -o yaml → compare against configMapKeyRef.key"
+
+expected_fix_class: [fix_configmap_key_reference, restore_original_key_name]
+detectability: high
+mean_time_to_diagnose_minutes: 5
+
+params_schema:
+  configmap:
+    type: string
+    description: Name of the target ConfigMap.
+  old_key:
+    type: string
+    description: The key name the app still expects.
+  new_key:
+    type: string
+    description: The renamed key that breaks the reference.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER
+handler_implemented: true

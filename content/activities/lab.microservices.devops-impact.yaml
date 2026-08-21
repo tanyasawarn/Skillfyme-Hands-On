@@ -1,0 +1,116 @@
+id: lab.microservices.devops-impact
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Write independent deploy manifests for two services
+  summary: Author separate deployment descriptors so each microservice ships on its own schedule.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [microservices, devops, ci-cd]
+
+curriculum:
+  primary_topic: topic.devops.microservices-devops-impact
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: microservices.devops-impact
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [microservices.fundamentals]
+  soft: []
+
+objectives:
+  - Author independent deployment descriptors per service
+  - Version each service's deployment config separately
+  - Avoid a single shared deploy step that couples unrelated services
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 30
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  cost_budget_usd: 0.02
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Author independent deploy descriptors
+    required: true
+    instructions_md: |
+      Create `~/deploy/users.deploy.json` and `~/deploy/orders.deploy.json`.
+      Each must contain its own `service_version` field, independent of
+      the other (they do not need to match).
+    validators:
+      - id: v.both-descriptors-exist
+        type: SHELL_ASSERT
+        run: "test -f ~/deploy/users.deploy.json && test -f ~/deploy/orders.deploy.json"
+        expect:
+          exit_code: 0
+        weight: 0.3
+        on_fail: "Both users.deploy.json and orders.deploy.json must exist in ~/deploy."
+      - id: v.users-has-version
+        type: SHELL_JSON
+        run: "cat ~/deploy/users.deploy.json"
+        expect:
+          jsonpath: "$.service_version"
+          op: "exists"
+        weight: 0.35
+        on_fail: "users.deploy.json is missing a service_version field."
+      - id: v.orders-has-version
+        type: SHELL_JSON
+        run: "cat ~/deploy/orders.deploy.json"
+        expect:
+          jsonpath: "$.service_version"
+          op: "exists"
+        weight: 0.35
+        on_fail: "orders.deploy.json is missing a service_version field."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Independent deployability means each service's release cadence is decoupled from every other's."
+      - level: 2
+        penalty: 0.06
+        text: "Create two separate JSON files, each with its own service_version key — they don't need to match."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.microservices.devops-impact/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

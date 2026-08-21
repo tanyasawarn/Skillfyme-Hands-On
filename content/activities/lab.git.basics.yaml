@@ -1,0 +1,149 @@
+id: lab.git.basics
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Your first Git commits, revert, and .gitignore
+  summary: Practice the core Git workflow — commit, amend a mistake, and ignore generated files.
+  difficulty_level: L1
+  estimated_minutes: 20
+  locale: en
+  authors: [content-team]
+  tags: [git, fundamentals]
+
+curriculum:
+  primary_topic: topic.devops.git-basics
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: git.basics
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [linux.cli]
+  soft: []
+
+objectives:
+  - Initialise a repository and make commits
+  - Revert a bad commit without losing history
+  - Exclude generated files from version control with .gitignore
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  cost_budget_usd: 0.02
+
+surfaces: [terminal]
+
+tasks:
+  - key: t1
+    title: Initialise a repo and make two commits
+    required: true
+    instructions_md: |
+      In `~/repo`, run `git init`, create `README.md` with any content,
+      commit it, then create `notes.md` and commit it separately.
+    validators:
+      - id: v.two-commits-exist
+        type: SHELL_ASSERT
+        run: "cd ~/repo && test $(git log --oneline | wc -l) -ge 2"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        on_fail: "Expected at least 2 commits. Use `git add <file> && git commit -m \"...\"` for each file separately."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Commit README.md first, then create and commit notes.md as a second, separate commit."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Revert a bad commit
+    required: true
+    instructions_md: |
+      Add a third commit that deletes README.md. Then use `git revert` to
+      undo that specific commit without rewriting history, restoring
+      README.md.
+    validators:
+      - id: v.readme-restored
+        type: SHELL_ASSERT
+        run: "test -f ~/repo/README.md"
+        expect:
+          exit_code: 0
+        weight: 0.5
+        on_fail: "README.md should exist again after the revert."
+      - id: v.revert-commit-exists
+        type: SHELL_ASSERT
+        run: "cd ~/repo && git log --oneline | grep -qi revert"
+        expect:
+          exit_code: 0
+        weight: 0.5
+        on_fail: "Expected a commit created by `git revert`, not a manual re-add. Revert preserves history — a plain re-commit does not."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`git revert <commit>` creates a new commit that undoes a previous one, unlike `git reset` which rewrites history."
+      - level: 2
+        penalty: 0.06
+        text: "Find the deleting commit's hash with `git log --oneline`, then run `git revert <that-hash>`."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+  - key: t3
+    title: Ignore generated files
+    required: true
+    instructions_md: |
+      Create a file `build.log` and a `.gitignore` that excludes it. Confirm
+      `git status` no longer lists build.log as untracked.
+    validators:
+      - id: v.gitignore-excludes-buildlog
+        type: SHELL_ASSERT
+        run: "cd ~/repo && git status --porcelain | grep -q build.log; test $? -ne 0"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        on_fail: "build.log still shows up in `git status` — add a line matching it to .gitignore."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Add the literal filename `build.log` on its own line in .gitignore."
+    solution_apply: scripts/t3_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.git.basics/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

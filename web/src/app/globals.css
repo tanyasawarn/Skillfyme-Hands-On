@@ -1,0 +1,612 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens ported from the Frontend Design System spec (Django/
+ * base.html origin, adapted here to Next.js -- no CSP nonce plumbing is
+ * needed since next/font and this stylesheet are build-time assets, not
+ * inline runtime scripts; "base.html :root block" maps to this file).
+ *
+ * This supersedes the project doc's §8.5 "dark-first" workspace mandate --
+ * an explicit, later instruction overriding an earlier architectural
+ * default. Strictly light-mode only, matching the spec: no
+ * prefers-color-scheme branch exists on purpose.
+ */
+:root {
+  color-scheme: light;
+
+  --accent: #496592;
+  --accent-deep: #3a5278;
+  --accent-soft: #e8edf4;
+  --bg-gradient: linear-gradient(160deg, #eef2f7 0%, #f5f0eb 50%, #fdf0e6 100%);
+  --surface: #ffffff;
+  --inset: #fdf0e6;
+  --ink: #000000;
+  --ink-muted: #000000;
+  --ink-soft: #000000;
+  --border: #eeeeee;
+  --border-strong: #dddddd;
+  --success: #16a34a;
+  --success-soft: #dcfce7;
+  --warning: #d97706;
+  --warning-soft: #fef3c7;
+  --danger: #dc2626;
+  --danger-soft: #fee2e2;
+
+  --font-display: var(--font-display), "Bricolage Grotesque", ui-sans-serif, sans-serif;
+  --font-body: var(--font-body), "Inter", ui-sans-serif, sans-serif;
+  --font-mono: var(--font-mono), "JetBrains Mono", ui-monospace, monospace;
+
+  --header-h: 93px;
+  --sidebar-w: 256px;
+
+  --ease-standard: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@theme inline {
+  --color-background: var(--surface);
+  --color-foreground: var(--ink);
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-mono);
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: var(--bg-gradient);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 14px;
+  position: relative;
+  min-height: 100vh;
+}
+
+/* Grid overlay -- 60x60px blueprint texture, doc: body::before */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    linear-gradient(rgba(10, 10, 10, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(10, 10, 10, 0.018) 1px, transparent 1px);
+  background-size: 60px 60px;
+}
+
+/* Radial glow -- top-right ambient depth, doc: body::after */
+body::after {
+  content: "";
+  position: fixed;
+  top: -200px;
+  right: -200px;
+  width: 600px;
+  height: 600px;
+  pointer-events: none;
+  z-index: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--accent) 0%, transparent 70%);
+  opacity: 0.05;
+}
+
+body > * {
+  position: relative;
+  z-index: 1;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+
+.font-mono-label {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+/* Top navigation -- 56px, solid border motif (structural container).
+   Dark (accent-deep) fill: the Skillfyme brand mark is a white-on-
+   transparent PNG, so the bar needs a dark ground for it to read at all;
+   accent-deep keeps this on the site's own palette instead of a bare
+   black. */
+.topnav {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  background: var(--accent-deep);
+  border-bottom: 1px solid var(--accent-deep);
+  padding: 0 24px;
+}
+
+.topnav-inner {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+}
+
+.topnav-spacer {
+  flex: 1;
+}
+
+/* App shell: sticky left sidebar (design token --sidebar-w, 256px) +
+   fluid main content, per the design system spec's layout section. */
+.app-shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar {
+  width: var(--sidebar-w);
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  position: sticky;
+  top: 56px;
+  height: calc(100vh - 56px);
+  padding: 20px 12px;
+}
+
+/* Course switcher -- lets a learner explore the other course in-app.
+   The LMS launch URL's ?course= param is still the source of truth on
+   first load; this overrides it locally by pushing a new URL. */
+.sidebar-course-switcher {
+  padding: 4px 14px 16px;
+  margin-bottom: 12px;
+  border-bottom: 1px dashed var(--border-strong);
+}
+
+.course-select {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--inset);
+  border: 1.5px solid var(--border-strong);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease-standard);
+}
+
+.course-select:hover,
+.course-select:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-link {
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  border-left: 3px solid transparent;
+  transition: background 0.15s var(--ease-standard), color 0.15s var(--ease-standard);
+}
+
+.sidebar-link:hover {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+/* Active sidebar item: 3px accent left border + accent-soft fill + 600
+   weight, per the design system's interaction-patterns section. */
+.sidebar-link--active {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+
+/* Profile menu -- top-right avatar + dropdown. Not-signed-in state is the
+   honest default until real auth exists (see ProfileMenu.tsx). */
+.profile-menu {
+  position: relative;
+}
+
+.profile-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 100px;
+  background: rgba(255, 255, 255, 0.15);
+  border: 1.5px solid rgba(255, 255, 255, 0.35);
+  color: #ffffff;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s var(--ease-standard);
+}
+
+.profile-avatar:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.profile-avatar:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(73, 101, 146, 0.35);
+}
+
+.profile-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 220px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(26, 26, 46, 0.16);
+  overflow: hidden;
+  z-index: 50;
+}
+
+.profile-dropdown-header {
+  padding: 14px 16px;
+  border-bottom: 1px dashed var(--border-strong);
+}
+
+.profile-dropdown-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.profile-dropdown-email {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.profile-dropdown-action {
+  width: 100%;
+  text-align: left;
+  padding: 12px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  transition: background 0.15s var(--ease-standard);
+}
+
+.profile-dropdown-action:hover {
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
+
+/* Card surface -- 12px radius, no default shadow, shadow only on hover
+   and always accent-tinted per the design system's elevation rule. */
+.lms-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: box-shadow 0.15s var(--ease-standard), transform 0.15s var(--ease-standard);
+}
+
+.lms-card:hover {
+  box-shadow: 0 8px 24px rgba(73, 101, 146, 0.12);
+}
+
+/* Course card banners -- hard-locked per spec, no dynamic overrides */
+.lms-course-banner {
+  background: linear-gradient(135deg, var(--accent), var(--accent-deep)) !important;
+}
+
+/* Dashed separators -- internal-division motif, distinct from solid
+   structural borders (topnav/breadcrumb use solid). */
+.lms-divider-dashed {
+  border-top: 1px dashed var(--border-strong);
+}
+
+/* Button system -- physical depth via layered shadow, accent-tinted glow,
+   never neutral. Rest state has an inset highlight + solid "lip"; hover
+   lifts, active presses the lip flat. */
+.lms-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 150px;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 9px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.15s var(--ease-standard), box-shadow 0.15s var(--ease-standard);
+}
+
+.lms-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.lms-action-btn--sm {
+  min-width: 118px;
+  height: 34px;
+  padding: 0 14px;
+}
+
+.lms-action-btn--primary {
+  color: #ffffff;
+  background: var(--accent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 3px 0 var(--accent-deep),
+    0 6px 16px rgba(73, 101, 146, 0.35);
+}
+
+.lms-action-btn--primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 4px 0 var(--accent-deep),
+    0 8px 20px rgba(73, 101, 146, 0.5);
+}
+
+.lms-action-btn--primary:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15), 0 1px 0 var(--accent-deep);
+}
+
+.lms-action-btn--outline {
+  color: var(--accent);
+  background: var(--surface);
+  border: 1.5px solid var(--accent);
+}
+
+.lms-action-btn--outline:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: var(--accent-soft);
+  box-shadow: 0 6px 16px rgba(73, 101, 146, 0.2);
+}
+
+.lms-action-btn--muted {
+  color: var(--ink-muted);
+  background: var(--inset);
+  border: 1px solid var(--border-strong);
+}
+
+.lms-action-btn--muted:hover:not(:disabled) {
+  transform: translateY(-1px);
+  color: var(--ink);
+}
+
+.lms-action-btn--danger {
+  color: #ffffff;
+  background: var(--danger);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 3px 0 #a81d1d, 0 6px 16px rgba(220, 38, 38, 0.35);
+}
+
+.lms-action-btn--danger:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.lms-action-btn--danger:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15), 0 1px 0 #a81d1d;
+}
+
+/* Status pills -- 100px radius per shape scale */
+.lms-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 100px;
+  padding: 4px 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.lms-pill--accent { background: var(--accent-soft); color: var(--accent-deep); }
+.lms-pill--success { background: var(--success-soft); color: var(--success); }
+.lms-pill--warning { background: var(--warning-soft); color: var(--warning); }
+.lms-pill--danger { background: var(--danger-soft); color: var(--danger); }
+.lms-pill--muted { background: var(--inset); color: var(--ink-soft); }
+
+/* Inset field -- recessed surface for inputs/pills */
+.lms-inset-field {
+  background: var(--inset);
+  border: 1.5px solid var(--border-strong);
+  border-radius: 8px;
+  transition: border-color 0.15s var(--ease-standard);
+}
+
+.lms-inset-field:focus-within {
+  border-color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------
+   Skill-driven catalog: hero strip, domain sections, card grid.
+   Same palette as everything else (accent/inset/surface tokens) -- the
+   redesign is about layout density and visual hierarchy, not new colors.
+   --------------------------------------------------------------------- */
+
+.catalog-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.catalog-hero-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 14px 20px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(73, 101, 146, 0.1);
+}
+
+.catalog-hero-stat-value {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--accent-deep);
+  line-height: 1;
+}
+
+.catalog-hero-stat-label {
+  font-size: 12px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.domain-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed var(--border-strong);
+}
+
+.domain-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 11px;
+  background: linear-gradient(135deg, var(--accent-soft), var(--inset));
+  color: var(--accent-deep);
+}
+
+.skill-grid {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+/* Card base -- both live and locked states share geometry; only
+   elevation, color, and interactivity differ. */
+.skill-card {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  min-height: 128px;
+}
+
+.skill-card--live {
+  cursor: pointer;
+  border-color: var(--accent-soft);
+  box-shadow: 0 2px 8px rgba(73, 101, 146, 0.08);
+  transition: transform 0.15s var(--ease-standard), box-shadow 0.15s var(--ease-standard), border-color 0.15s var(--ease-standard);
+}
+
+.skill-card--live:hover {
+  transform: translateY(-3px);
+  border-color: var(--accent);
+  box-shadow: 0 14px 28px rgba(73, 101, 146, 0.22);
+}
+
+.skill-card--locked {
+  background: var(--inset);
+  border-color: var(--border);
+  opacity: 0.7;
+}
+
+.skill-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.skill-card-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px 3px 7px;
+  border-radius: 100px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.skill-card-badge--live {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.skill-card-badge--locked {
+  background: transparent;
+  color: var(--ink-soft);
+  border: 1px solid var(--border-strong);
+}
+
+.skill-card-title {
+  margin-top: 12px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1.3;
+  color: var(--ink);
+}
+
+.skill-card-title--locked {
+  color: var(--ink-soft);
+}
+
+.skill-card-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  flex: 1;
+}
+
+.skill-card-footer {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+.skill-card-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--accent);
+}

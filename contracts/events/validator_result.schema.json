@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.practiceengine.internal/events/validator_result.schema.json",
+  "title": "ValidatorResultPayload",
+  "description": "Doc §4.2 Validation category, §6.2 result shape. Produced by Dev B's Evaluation Service.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["validator_id", "status", "duration_ms"],
+  "properties": {
+    "validator_id": { "type": "string" },
+    "status": { "type": "string", "enum": ["PASS", "FAIL", "ERROR", "SKIP"] },
+    "observed": {},
+    "expected": {},
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "evidence_ref": { "type": "string" }
+  }
+}

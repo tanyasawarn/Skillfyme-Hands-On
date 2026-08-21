@@ -1,0 +1,129 @@
+id: lab.k8s.architecture
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Inspect the Kubernetes control plane
+  summary: Identify the control-plane components backing a running cluster using kubectl.
+  difficulty_level: L1
+  estimated_minutes: 20
+  locale: en
+  authors: [content-team]
+  tags: [kubernetes, architecture]
+
+curriculum:
+  primary_topic: topic.devops.k8s.architecture
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: k8s.architecture
+    weight: 1.0
+    primary: true
+    bloom: understand
+
+prerequisites:
+  hard: [docker.swarm]
+  soft: []
+
+objectives:
+  - Identify the control-plane components in a running cluster
+  - Distinguish control-plane pods from worker-node workloads
+  - Query cluster version and node count via kubectl
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 20
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal]
+
+tasks:
+  - key: t1
+    title: List control-plane components
+    required: true
+    instructions_md: |
+      Write the names of all pods in the `kube-system` namespace to
+      `~/control-plane-pods.txt`.
+    validators:
+      - id: v.output-file-exists
+        type: FILE_EXISTS
+        run: "~/control-plane-pods.txt"
+        expect:
+          exists: true
+        weight: 0.3
+        on_fail: "~/control-plane-pods.txt doesn't exist yet."
+      - id: v.output-lists-kube-system-pods
+        type: SHELL_ASSERT
+        run: "diff <(sort ~/control-plane-pods.txt) <(kubectl get pods -n kube-system -o name | sed 's|pod/||' | sort)"
+        expect:
+          exit_code: 0
+        weight: 0.7
+        on_fail: "The file's contents don't match the actual kube-system pod names. Try `kubectl get pods -n kube-system -o name`."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "kube-system is where control-plane components (scheduler, controller-manager, etc.) run as pods."
+      - level: 2
+        penalty: 0.06
+        text: "Run `kubectl get pods -n kube-system -o name | sed 's|pod/||' > ~/control-plane-pods.txt`."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Query cluster version
+    required: true
+    instructions_md: |
+      Write the cluster's server version (from `kubectl version`) to
+      `~/cluster-version.txt`.
+    validators:
+      - id: v.version-file-nonempty
+        type: SHELL_ASSERT
+        run: "test -s ~/cluster-version.txt"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        on_fail: "~/cluster-version.txt doesn't exist or is empty."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`kubectl version` prints both client and server versions."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.k8s.architecture/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

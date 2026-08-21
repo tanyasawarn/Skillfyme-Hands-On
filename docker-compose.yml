@@ -1,0 +1,60 @@
+name: practice-engine
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: practice
+      POSTGRES_PASSWORD: practice
+      POSTGRES_DB: practice_engine
+    ports:
+      - "5433:5432"   # host 5432 is taken by a native Postgres install; container stays on 5432 internally
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./practice-core/db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U practice -d practice_engine"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  nats:
+    image: nats:2-alpine
+    command: ["-js"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"   # monitoring
+
+  # Single-node k3s for Dev A's early T1 work (doc §5.2 workhorse tier).
+  # Not required for Dev B's Phase 1 milestones except where Content CI
+  # needs a real provision target (§3.5 step 2) — until Dev A's
+  # Orchestrator is live, Dev B builds against the fake Orchestrator
+  # server instead (see PLAN.md "both devs build against the frozen
+  # contract from day one using fakes").
+  k3s:
+    image: rancher/k3s:latest
+    privileged: true
+    command: ["server", "--disable=traefik"]
+    ports:
+      - "6443:6443"
+    environment:
+      K3S_KUBECONFIG_OUTPUT: /output/kubeconfig.yaml
+      K3S_KUBECONFIG_MODE: "666"
+    volumes:
+      - k3s_data:/var/lib/rancher/k3s
+      - ./.local/k3s-output:/output
+    profiles: ["dev-a", "full"]   # not started by default `docker-compose up`
+
+volumes:
+  pg_data:
+  k3s_data:

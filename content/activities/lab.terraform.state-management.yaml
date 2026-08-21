@@ -1,0 +1,138 @@
+id: lab.terraform.state-management
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Inspect and import into Terraform state
+  summary: Read the state file directly, then import an existing resource Terraform doesn't know about.
+  difficulty_level: L3
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [terraform, state]
+
+curriculum:
+  primary_topic: topic.devops.terraform-state-management
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: terraform.state-management
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [terraform.basics]
+  soft: []
+
+objectives:
+  - Query a resource's attributes directly from the state file
+  - Import a resource Terraform didn't create into its state
+  - Explain why state drift matters
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.terraform-applied-state.v1
+    - fixture: fx.orphan-local-file.v1
+  cost_budget_usd: 0.02
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Query state for a resource attribute
+    required: true
+    instructions_md: |
+      From `~/infra`, write the `id` attribute of the `local_file.demo`
+      resource (from the pre-applied state) to `~/state-id.txt`.
+    validators:
+      - id: v.state-id-file-exists
+        type: FILE_EXISTS
+        run: "~/state-id.txt"
+        expect:
+          exists: true
+        weight: 0.3
+        on_fail: "~/state-id.txt doesn't exist yet."
+      - id: v.state-id-matches
+        type: SHELL_ASSERT
+        run: "cd ~/infra && [ \"$(cat ~/state-id.txt)\" = \"$(terraform state show local_file.demo | grep '^    id' | awk -F'\"' '{print $2}')\" ]"
+        expect:
+          exit_code: 0
+        weight: 0.7
+        on_fail: "The id in state-id.txt doesn't match what `terraform state show local_file.demo` reports."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`terraform state show <resource-address>` prints all of that resource's attributes as tracked in state."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Import an unmanaged resource
+    required: true
+    instructions_md: |
+      `/tmp/orphan.txt` exists on disk but isn't tracked by Terraform.
+      Add a matching `local_file.orphan` resource block to your config,
+      then import the existing file into state without recreating it.
+    validators:
+      - id: v.orphan-imported
+        type: SHELL_ASSERT
+        run: "cd ~/infra && terraform state list | grep -q local_file.orphan"
+        expect:
+          exit_code: 0
+        weight: 0.6
+        on_fail: "local_file.orphan isn't in Terraform state yet."
+      - id: v.orphan-file-unchanged
+        type: SHELL_ASSERT
+        run: "cd ~/infra && terraform plan -detailed-exitcode; test $? -eq 0"
+        expect:
+          exit_code: 0
+        weight: 0.4
+        on_fail: "terraform plan shows a pending change to local_file.orphan — a correct import shouldn't trigger a diff against the existing file."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "`terraform import` binds an existing resource block to real infrastructure without creating or destroying anything."
+      - level: 2
+        penalty: 0.1
+        text: "Add a resource \"local_file\" \"orphan\" { filename = \"/tmp/orphan.txt\", content = ... } block matching the file's actual content, then `terraform import local_file.orphan /tmp/orphan.txt`."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 9000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.terraform.state-management/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

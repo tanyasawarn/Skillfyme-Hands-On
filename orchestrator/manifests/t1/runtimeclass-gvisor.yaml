@@ -1,0 +1,29 @@
+# Doc §5.2: "RuntimeClass: gvisor" for the T1 shared-container tier.
+#
+# This object is safe to apply to any cluster -- creating a RuntimeClass
+# does not require gVisor to be installed, but pods that *reference* it
+# will fail to schedule until a node advertises the "gvisor" runtime
+# handler (i.e. containerd is configured with a gvisor runtime and the
+# node is labelled accordingly).
+#
+# Local dev gap (see memory: practice_engine_dev_a): gVisor's runsc
+# binary needs a real Linux host with the KVM/ptrace isolation gVisor
+# depends on. Docker Desktop's Linux VM (which this project's k3s
+# container runs inside) does not support installing gVisor in a way
+# that's usable from a nested k3s container -- this is a genuine
+# environment limitation, not a shortcut. Provisioner.createWorkspacePod
+# in internal/k8s/provision.go deliberately does NOT set
+# spec.runtimeClassName for local dev, specifically because setting it
+# here without a node advertising "gvisor" would make every Provision()
+# call fail pod scheduling with FailedScheduling.
+#
+# In a real deployment (doc §5.2's node group practice-t1), apply this
+# manifest AND ensure containerd on those nodes has the gvisor runtime
+# configured (e.g. via a gVisor-enabling node bootstrap script or a
+# managed-K8s gVisor sandbox feature, such as GKE Sandbox), then set
+# runtimeClassName: gvisor in the pod spec.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+handler: runsc

@@ -1,0 +1,29 @@
+id: f.docker.dockerfile-wrong-workdir
+version: 1
+title: Dockerfile WORKDIR doesn't match the app's expected runtime path
+summary: A build succeeds but the container crashes at runtime because the app can't find a config file relative to the wrong WORKDIR.
+
+targets: [docker.build]
+symptom_class: ContainerExitedNonZero
+skills_probed: [docker.basics]
+
+canonical_diagnostic_path:
+  - "docker run → container exits immediately with a nonzero code"
+  - "docker logs → see 'file not found' referencing a relative path"
+  - "docker inspect --format '{{.Config.WorkingDir}}' → compare against the app's expected layout"
+  - "cat Dockerfile → check WORKDIR against where COPY placed the files"
+
+expected_fix_class: [fix_workdir, fix_copy_destination]
+detectability: high
+mean_time_to_diagnose_minutes: 7
+
+params_schema:
+  image:
+    type: string
+    description: Name/tag of the built image.
+  wrong_workdir:
+    type: string
+    description: The incorrect WORKDIR path to inject into the build.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

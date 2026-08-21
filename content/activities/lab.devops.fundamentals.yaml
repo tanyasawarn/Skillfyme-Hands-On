@@ -1,0 +1,139 @@
+id: lab.devops.fundamentals
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Set up your first DevOps toolchain
+  summary: Install and verify the core CLI tools every DevOps workflow depends on.
+  difficulty_level: L1
+  estimated_minutes: 20
+  locale: en
+  authors: [content-team]
+  tags: [devops, fundamentals, tooling]
+
+curriculum:
+  primary_topic: topic.devops.fundamentals
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: devops.fundamentals
+    weight: 1.0
+    primary: true
+    bloom: understand
+
+prerequisites:
+  hard: []
+  soft: []
+
+objectives:
+  - Verify the presence and versions of core DevOps CLI tools
+  - Configure a global Git identity as the first step of any workflow
+  - Record toolchain versions to a manifest file
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  cost_budget_usd: 0.02
+
+surfaces: [terminal]
+
+tasks:
+  - key: t1
+    title: Record installed tool versions
+    required: true
+    instructions_md: |
+      Create `~/toolchain.txt` containing the output of `git --version` on
+      its first line.
+    validators:
+      - id: v.manifest-exists
+        type: FILE_EXISTS
+        run: "~/toolchain.txt"
+        expect:
+          exists: true
+        weight: 0.3
+        on_fail: "~/toolchain.txt doesn't exist yet."
+      - id: v.manifest-has-git-version
+        type: FILE_CONTENT
+        run: "~/toolchain.txt"
+        expect:
+          contains: "git version"
+        weight: 0.7
+        on_fail: "The file should contain the output of `git --version`. Try `git --version > ~/toolchain.txt`."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Redirect a command's output into a file with `>`."
+      - level: 2
+        penalty: 0.05
+        text: "Run `git --version > ~/toolchain.txt`."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count]
+
+  - key: t2
+    title: Configure your Git identity
+    required: true
+    instructions_md: |
+      Set a global Git username and email so future commits are correctly
+      attributed. Use `devops-learner` and `learner@example.dev`.
+    validators:
+      - id: v.git-username-set
+        type: SHELL_ASSERT
+        run: "git config --global user.name"
+        expect:
+          exit_code: 0
+          stdout_contains: "devops-learner"
+        weight: 0.5
+        on_fail: "Git user.name isn't set to devops-learner. Run `git config --global user.name \"devops-learner\"`."
+      - id: v.git-email-set
+        type: SHELL_ASSERT
+        run: "git config --global user.email"
+        expect:
+          exit_code: 0
+          stdout_contains: "learner@example.dev"
+        weight: 0.5
+        on_fail: "Git user.email isn't set. Run `git config --global user.email \"learner@example.dev\"`."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`git config --global` sets identity for every repo on this machine."
+      - level: 2
+        penalty: 0.05
+        text: "Run both `git config --global user.name \"devops-learner\"` and `git config --global user.email \"learner@example.dev\"`."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.devops.fundamentals/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

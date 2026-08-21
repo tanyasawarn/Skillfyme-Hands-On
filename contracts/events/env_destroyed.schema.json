@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.practiceengine.internal/events/env_destroyed.schema.json",
+  "title": "EnvDestroyedPayload",
+  "description": "Doc §4.2 Environment category. Produced by Dev A's Orchestrator/reaper. Integration point #4 in PLAN.md — the only way Practice Core learns an environment is gone.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["environment_id", "reason"],
+  "properties": {
+    "environment_id": { "type": "string" },
+    "reason": { "type": "string", "enum": ["submit", "idle", "ttl", "budget", "reaper", "admin"] },
+    "snapshot_id": { "type": "string", "description": "present if a snapshot was taken before destroy" }
+  }
+}

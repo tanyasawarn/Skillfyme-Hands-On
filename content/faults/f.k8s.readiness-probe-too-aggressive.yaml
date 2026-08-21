@@ -1,0 +1,32 @@
+# Doc §3.4 / §3.3's own worked example, transcribed as the first real
+# fault-library entry (Phase 2, PLAN.md).
+id: f.k8s.readiness-probe-too-aggressive
+version: 1
+title: Readiness probe timeout too aggressive
+summary: A Deployment's readiness probe timeout is shorter than the app's real startup time, causing rolling updates to stall.
+
+targets: [k8s.pod-lifecycle, k8s.deployment]
+symptom_class: ReadinessProbeFailed
+skills_probed: [k8s.deployments, k8s.troubleshooting]
+
+canonical_diagnostic_path:
+  - "kubectl get pods → notice pods stuck in Not Ready / 0/1 Running"
+  - "kubectl describe pod → see Readiness probe failed events"
+  - "kubectl logs → confirm the app itself is healthy, just slow to start"
+  - "kubectl get deploy -o yaml → inspect readinessProbe.timeoutSeconds / initialDelaySeconds"
+
+expected_fix_class: [increase_probe_timeout, increase_initial_delay]
+detectability: medium
+mean_time_to_diagnose_minutes: 8
+
+params_schema:
+  service:
+    type: string
+    description: Name of the target Deployment.
+  timeout_seconds:
+    type: integer
+    description: The too-aggressive readinessProbe.timeoutSeconds value to inject.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER
+handler_implemented: true

@@ -1,0 +1,103 @@
+id: lab.observability.alerting
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Configure a Prometheus alert rule and route
+  summary: Write an alert rule with a for-duration, and route it through Alertmanager.
+  difficulty_level: L3
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [prometheus, alertmanager, alerting]
+
+curriculum:
+  primary_topic: topic.devops.observability-alerting
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: observability.alerting
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [observability.tracing]
+  soft: []
+
+objectives:
+  - Author a Prometheus alert rule with a condition and for-duration
+  - Confirm the alert fires and reaches Alertmanager
+  - Explain why a for-duration prevents alerting on brief blips
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.prometheus-alertmanager-installed.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Author an alert rule that fires
+    required: true
+    instructions_md: |
+      Write an alert rule `TargetDown` firing when `up == 0` for at least
+      `1m`. Confirm it eventually shows as `firing` (not just `pending`)
+      in Alertmanager.
+    validators:
+      - id: v.alert-firing-in-alertmanager
+        type: SHELL_ASSERT
+        run: "curl -sf localhost:9093/api/v2/alerts | grep -q '\"alertname\":\"TargetDown\"'"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        on_fail: "TargetDown isn't showing up in Alertmanager yet. Check the rule syntax and that enough time has passed for the for: duration to elapse."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "An alert stays 'pending' until its condition has been continuously true for the full `for:` duration — this is what prevents alerting on a single missed scrape."
+      - level: 2
+        penalty: 0.08
+        text: "groups: [{name: ..., rules: [{alert: TargetDown, expr: up == 0, for: 1m}]}]."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.80
+      task_completion: 0.10
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.observability.alerting/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

@@ -1,0 +1,26 @@
+id: f.prometheus.alert-rule-syntax-silent-fail
+version: 1
+title: A malformed alert rule file is silently skipped, alerts never fire
+summary: An alert rules file has a YAML/PromQL syntax error, so Prometheus loads with that group entirely absent -- no crash, no obvious error surface to the learner.
+
+targets: [observability.alertmanager]
+symptom_class: AlertsNeverFire
+skills_probed: [observability.alerting]
+
+canonical_diagnostic_path:
+  - "confirm the known-bad condition is true, but no alert fires"
+  - "check Prometheus /rules or /status/config → notice the rule group is missing"
+  - "check Prometheus startup logs for a rule-file load error"
+  - "validate the rules file with promtool check rules"
+
+expected_fix_class: [fix_yaml_syntax, fix_promql_expression]
+detectability: low
+mean_time_to_diagnose_minutes: 10
+
+params_schema:
+  rules_file:
+    type: string
+    description: Path of the rules file to corrupt.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

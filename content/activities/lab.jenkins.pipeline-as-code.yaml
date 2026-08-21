@@ -1,0 +1,137 @@
+id: lab.jenkins.pipeline-as-code
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Author a declarative Jenkinsfile
+  summary: Write a version-controlled Jenkinsfile with build, test, and deploy stages.
+  difficulty_level: L2
+  estimated_minutes: 30
+  locale: en
+  authors: [content-team]
+  tags: [jenkins, pipeline-as-code, ci-cd]
+
+curriculum:
+  primary_topic: topic.devops.jenkins-pipeline-as-code
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: jenkins.pipeline-as-code
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [jenkins.basics]
+  soft: []
+
+objectives:
+  - Structure a Jenkinsfile using declarative pipeline syntax
+  - Define build, test, and deploy stages in the correct order
+  - Version-control the Jenkinsfile alongside application code
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 30
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.git-repo-empty.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Write a declarative Jenkinsfile
+    required: true
+    instructions_md: |
+      In `~/repo`, create a `Jenkinsfile` with declarative syntax
+      (`pipeline { agent any stages { ... } }`) containing three stages in
+      order: `Build`, `Test`, `Deploy`.
+    validators:
+      - id: v.jenkinsfile-exists
+        type: FILE_EXISTS
+        run: "~/repo/Jenkinsfile"
+        expect:
+          exists: true
+        weight: 0.2
+        on_fail: "~/repo/Jenkinsfile doesn't exist yet."
+      - id: v.jenkinsfile-declarative
+        type: FILE_CONTENT
+        run: "~/repo/Jenkinsfile"
+        expect:
+          contains_all: ["pipeline", "agent", "stages"]
+        weight: 0.3
+        on_fail: "Jenkinsfile should use declarative syntax: a top-level `pipeline` block with `agent` and `stages`."
+      - id: v.jenkinsfile-stage-order
+        type: SHELL_ASSERT
+        run: "awk '/stage\\(.Build./{print NR; exit}' ~/repo/Jenkinsfile > /tmp/b.txt; awk '/stage\\(.Test./{print NR; exit}' ~/repo/Jenkinsfile > /tmp/t.txt; [ -s /tmp/b.txt ] && [ -s /tmp/t.txt ] && [ \"$(cat /tmp/b.txt)\" -lt \"$(cat /tmp/t.txt)\" ]"
+        expect:
+          exit_code: 0
+        weight: 0.5
+        on_fail: "The Build stage should come before the Test stage in the Jenkinsfile."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Declarative syntax wraps everything in `pipeline { agent any stages { stage('Name') { steps { ... } } } }`."
+      - level: 2
+        penalty: 0.08
+        text: "Write three stage blocks in order: stage('Build'), stage('Test'), stage('Deploy'), each with a steps block."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Commit the Jenkinsfile
+    required: true
+    instructions_md: |
+      Commit the Jenkinsfile to the repo so the pipeline definition is
+      version-controlled alongside the application code.
+    validators:
+      - id: v.jenkinsfile-committed
+        type: SHELL_ASSERT
+        run: "cd ~/repo && git log --oneline -- Jenkinsfile"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        on_fail: "Jenkinsfile isn't committed yet. `git add Jenkinsfile && git commit -m \"...\"`."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Pipeline-as-code means the pipeline definition lives in Git, not in Jenkins' UI config."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 9000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.jenkins.pipeline-as-code/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

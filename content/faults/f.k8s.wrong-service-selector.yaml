@@ -1,0 +1,30 @@
+id: f.k8s.wrong-service-selector
+version: 1
+title: Service selector doesn't match pod labels
+summary: A Service's selector was updated but no longer matches any running pod's labels, so it has zero endpoints.
+
+targets: [k8s.service]
+symptom_class: NoEndpoints
+skills_probed: [k8s.services, k8s.troubleshooting]
+
+canonical_diagnostic_path:
+  - "curl the service → connection refused / timeout"
+  - "kubectl get endpoints <svc> → notice empty ADDRESSES"
+  - "kubectl get svc <svc> -o yaml → inspect spec.selector"
+  - "kubectl get pods --show-labels → compare against the selector"
+
+expected_fix_class: [fix_service_selector, fix_pod_labels]
+detectability: medium
+mean_time_to_diagnose_minutes: 7
+
+params_schema:
+  service:
+    type: string
+    description: Name of the target Service.
+  wrong_selector_value:
+    type: string
+    description: The mismatched label value to inject into the selector.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER
+handler_implemented: true

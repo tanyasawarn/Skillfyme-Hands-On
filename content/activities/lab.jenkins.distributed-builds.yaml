@@ -1,0 +1,109 @@
+id: lab.jenkins.distributed-builds
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Pin a pipeline stage to a labeled agent
+  summary: Configure a Jenkinsfile to run specific stages on specific labeled build agents.
+  difficulty_level: L3
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [jenkins, distributed-builds]
+
+curriculum:
+  primary_topic: topic.devops.jenkins-distributed-builds
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: jenkins.distributed-builds
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [jenkins.security-integration]
+  soft: []
+
+objectives:
+  - Explain why a master-slave (controller-agent) architecture enables parallel builds
+  - Pin a pipeline stage to a labeled agent instead of running everything on one node
+  - Recognise when agent-per-stage is needed vs a single top-level agent
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.jenkinsfile-basic.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Pin the Build stage to a labeled agent
+    required: true
+    instructions_md: |
+      Change the top-level `agent any` in `~/repo/Jenkinsfile` to `agent
+      none`, then give the `Build` stage its own `agent { label
+      'linux-builder' }`.
+    validators:
+      - id: v.top-level-agent-none
+        type: FILE_CONTENT
+        run: "~/repo/Jenkinsfile"
+        expect:
+          contains: "agent none"
+        weight: 0.4
+        on_fail: "The top-level pipeline block should declare `agent none` so each stage controls its own agent."
+      - id: v.build-stage-labeled-agent
+        type: FILE_CONTENT
+        run: "~/repo/Jenkinsfile"
+        expect:
+          contains: "label 'linux-builder'"
+        weight: 0.6
+        on_fail: "The Build stage should have its own `agent { label 'linux-builder' }` block."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`agent none` at the top level means no default — every stage that needs to run must declare its own agent."
+      - level: 2
+        penalty: 0.08
+        text: "Inside stage('Build') { ... }, add: agent { label 'linux-builder' }."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.jenkins.distributed-builds/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

@@ -1,0 +1,137 @@
+id: lab.devsecops.container-security-tools
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Write a container security checklist script
+  summary: Codify common Dockerfile security anti-patterns as an automated check.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [devsecops, containers, security]
+
+curriculum:
+  primary_topic: topic.devops.container-security-tooling
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: devsecops.container-security-tools
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [devsecops.fundamentals]
+  soft: [docker.basics]
+
+objectives:
+  - Recognise common Dockerfile security anti-patterns
+  - Write a script that flags a Dockerfile running as root
+  - Apply the fix and confirm the check passes
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.dockerfile-insecure.v1
+  cost_budget_usd: 0.02
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Write a Dockerfile lint check for root user
+    required: true
+    instructions_md: |
+      `~/app/Dockerfile` has no `USER` instruction, so it runs as root by
+      default. Write `~/app/check-root.sh` that exits non-zero if the
+      Dockerfile has no `USER` line other than root.
+    validators:
+      - id: v.check-script-exists
+        type: SHELL_ASSERT
+        run: "test -x ~/app/check-root.sh"
+        expect:
+          exit_code: 0
+        weight: 0.3
+        on_fail: "check-root.sh doesn't exist or isn't executable."
+      - id: v.check-fails-on-insecure-dockerfile
+        type: SHELL_ASSERT
+        run: "cd ~/app && ./check-root.sh; test $? -ne 0"
+        expect:
+          exit_code: 0
+        weight: 0.7
+        on_fail: "check-root.sh should exit non-zero against the current Dockerfile, since it has no USER instruction."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`grep -q '^USER ' Dockerfile` tells you whether a non-default user is set."
+      - level: 2
+        penalty: 0.08
+        text: "Something like: `grep -q '^USER ' Dockerfile && exit 0 || exit 1`."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Fix the Dockerfile and pass the check
+    required: true
+    instructions_md: |
+      Add a `USER appuser` instruction to `~/app/Dockerfile` (after
+      creating that user) so your check-root.sh script now passes.
+    validators:
+      - id: v.dockerfile-has-user
+        type: FILE_CONTENT
+        run: "~/app/Dockerfile"
+        expect:
+          contains: "USER appuser"
+        weight: 0.5
+        on_fail: "Dockerfile still doesn't have a `USER appuser` line."
+      - id: v.check-now-passes
+        type: SHELL_ASSERT
+        run: "cd ~/app && ./check-root.sh"
+        expect:
+          exit_code: 0
+        weight: 0.5
+        on_fail: "check-root.sh should now exit 0 against the fixed Dockerfile."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Add `RUN useradd -m appuser` before `USER appuser` so the user actually exists in the image."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.devsecops.container-security-tools/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

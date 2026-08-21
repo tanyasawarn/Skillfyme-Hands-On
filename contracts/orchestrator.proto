@@ -1,0 +1,241 @@
+syntax = "proto3";
+
+package practiceengine.orchestrator.v1;
+
+option go_package = "github.com/tanyasawarn/skillfyme-hands-on/orchestrator/pkg/pb;orchestratorv1";
+
+// EnvironmentOrchestrator is the sole synchronous entry point into the
+// Environment Orchestrator service (Dev A, Go). Practice Core (Dev B) never
+// talks to the execution fabric directly — everything goes through this
+// contract. See doc §5.1, §5.5, §8.1, §8.2.
+service EnvironmentOrchestrator {
+  // Provision requests a new environment for an attempt. Long-running:
+  // returns immediately with status=PROVISIONING: the caller subscribes to
+  // env.* events (see events.md) for READY/FAILED, mirroring the doc's
+  // "Operation, not a blocked request" API principle (§8.3).
+  rpc Provision(ProvisionRequest) returns (ProvisionResponse);
+
+  // Connect returns live connection endpoints (terminal WS, editor, preview)
+  // for an already-READY environment.
+  rpc Connect(ConnectRequest) returns (ConnectResponse);
+
+  // Snapshot forces an out-of-cycle workspace snapshot (in addition to the
+  // periodic 5-min snapshot). Used before RESET_ALL, on suspend, on TTL/idle.
+  rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
+
+  // Restore provisions a fresh environment and restores the given snapshot
+  // into it (RESET_KEEP_FILES, resume-from-suspend). §4.1, §5.5.
+  rpc Restore(RestoreRequest) returns (ProvisionResponse);
+
+  // Validate is NOT how validators run (that's Dev B's Validator Runner
+  // executing against minted credentials) — this RPC exists only to mint
+  // short-lived read-only credentials scoped to one environment, per the
+  // MintValidatorCredentials integration point in PLAN.md Phase 1 #2.
+  rpc MintValidatorCredentials(MintCredentialsRequest) returns (MintCredentialsResponse);
+
+  // Destroy tears down an environment immediately. Idempotent — destroying
+  // an already-destroyed environment is a no-op success, never an error.
+  rpc Destroy(DestroyRequest) returns (DestroyResponse);
+
+  // InjectFault applies a fault manifest to an already-healthy environment.
+  // Phase 2 integration point (PLAN.md Phase 2) — included now so the
+  // contract doesn't need a breaking change later.
+  rpc InjectFault(InjectFaultRequest) returns (InjectFaultResponse);
+
+  // CaptureBaseline and CheckRegression back the NO_REGRESSION validator
+  // type (doc §6.2, §7.3 step 3: "Capture full resource inventory +
+  // health matrix. This is the NO_REGRESSION reference"). Narrow,
+  // purpose-built RPCs rather than the doc's eventual design (Dev B
+  // executing this itself via MintValidatorCredentials) -- that
+  // credential-minting path isn't implemented yet, same pragmatic
+  // "swap it in later" precedent as InjectFault taking this shortcut
+  // ahead of a fuller mechanism.
+  rpc CaptureBaseline(CaptureBaselineRequest) returns (CaptureBaselineResponse);
+  rpc CheckRegression(CheckRegressionRequest) returns (CheckRegressionResponse);
+
+  // ExecValidator replaces Dev B's FakeValidatorExecutor for the 6
+  // validator types the published lab content actually uses
+  // (SHELL_ASSERT, SHELL_JSON, FILE_EXISTS, FILE_CONTENT, FILE_PARSE,
+  // K8S_ASSERT). Same pragmatic shortcut as InjectFault/CaptureBaseline:
+  // the doc's real design has Dev B executing validators itself via
+  // MintValidatorCredentials, which isn't implemented -- SHELL_*/FILE_*
+  // types exec inside the workspace pod (no cluster credentials needed,
+  // same non-interactive exec pattern as the session broker's telemetry
+  // hook install); K8S_ASSERT executes via the orchestrator's own K8s API
+  // access, since the workspace pod itself has no kubectl or cluster
+  // credentials (confirmed gap, same one InjectFault/CaptureBaseline hit).
+  rpc ExecValidator(ExecValidatorRequest) returns (ExecValidatorResponse);
+
+  // ExecShell runs an arbitrary command inside the workspace pod and
+  // returns its raw output, unlike ExecValidator which only reports a
+  // PASS/FAIL/ERROR verdict. Built for the content-CI golden-path harness
+  // (PLAN.md M1.3): applying an authored reference_solution's
+  // solution_apply script needs the command to actually run and mutate
+  // pod state, not be evaluated as an assertion. Same execInPod mechanism
+  // ExecValidator's SHELL_* types already use.
+  rpc ExecShell(ExecShellRequest) returns (ExecShellResponse);
+}
+
+enum Tier {
+  TIER_UNSPECIFIED = 0;
+  TIER_T0_BROWSER = 1;
+  TIER_T1_SHARED_CONTAINER = 2;
+  TIER_T2_ISOLATED_MICROVM = 3;
+  TIER_T3_CLOUD_ACCOUNT = 4;
+}
+
+enum EnvironmentStatus {
+  ENVIRONMENT_STATUS_UNSPECIFIED = 0;
+  ENVIRONMENT_STATUS_PROVISIONING = 1;
+  ENVIRONMENT_STATUS_READY = 2;
+  ENVIRONMENT_STATUS_PROVISION_FAILED = 3;
+  ENVIRONMENT_STATUS_IDLE = 4;
+  ENVIRONMENT_STATUS_DESTROYED = 5;
+}
+
+message ResourceSpec {
+  string cpu = 1;        // e.g. "2"
+  string memory = 2;      // e.g. "4Gi"
+  string disk = 3;        // e.g. "10Gi"
+}
+
+message FixtureRef {
+  string fixture_id = 1;
+  string version = 2;
+}
+
+message ProvisionRequest {
+  string attempt_id = 1;             // idempotency + correlation key, doc §13.5 #1
+  string blueprint_id = 2;
+  string blueprint_version = 3;
+  Tier tier = 4;
+  ResourceSpec resources = 5;
+  repeated FixtureRef fixtures = 6;
+  int32 ttl_minutes = 7;
+  int32 idle_timeout_minutes = 8;
+  string network_policy = 9;
+  string idempotency_key = 10;
+}
+
+message ProvisionResponse {
+  string environment_id = 1;
+  EnvironmentStatus status = 2;
+  // Populated once READY; absent while PROVISIONING (caller waits on events).
+  ConnectResponse endpoints = 3;
+}
+
+message ConnectRequest {
+  string environment_id = 1;
+}
+
+message ConnectResponse {
+  string terminal_ws_url = 1;
+  string editor_url = 2;
+  string preview_url_template = 3;   // {env_id}-{port}.preview.platform.io
+  string session_token = 4;          // scoped, short-lived
+  string expires_at = 5;             // RFC3339
+}
+
+message SnapshotRequest {
+  string environment_id = 1;
+  string attempt_id = 2;
+  string reason = 3;                 // "suspend" | "periodic" | "pre_reset" | "preemption"
+}
+
+message SnapshotResponse {
+  string snapshot_id = 1;
+  string storage_uri = 2;            // attempts/{id}/snapshots/{ts}.tar.zst
+  int64 bytes = 3;
+}
+
+message RestoreRequest {
+  string attempt_id = 1;
+  string snapshot_id = 2;
+  string blueprint_id = 3;
+  string blueprint_version = 4;
+  Tier tier = 5;
+  ResourceSpec resources = 6;
+}
+
+message MintCredentialsRequest {
+  string environment_id = 1;
+  int32 ttl_seconds = 2;             // 300s default per §6.2 execution rules
+  repeated string scopes = 3;        // e.g. "k8s.read_only", "cloud.read_only"
+}
+
+message MintCredentialsResponse {
+  string credential_ref = 1;         // opaque handle, never the raw secret in logs
+  string expires_at = 2;
+}
+
+message DestroyRequest {
+  string environment_id = 1;
+  string reason = 2;                 // "submit" | "idle" | "ttl" | "budget" | "reaper" | "admin"
+}
+
+message DestroyResponse {
+  bool already_destroyed = 1;
+}
+
+message InjectFaultRequest {
+  string environment_id = 1;
+  string fault_id = 2;
+  string fault_version = 3;
+  map<string, string> params = 4;
+}
+
+message InjectFaultResponse {
+  bool applied = 1;
+  bool symptom_verified = 2;         // health-recheck confirms authored symptom manifested
+}
+
+message CaptureBaselineRequest {
+  string environment_id = 1;
+  string snapshot_key = 2;           // content-authored label, e.g. "baseline.other-services" (doc §7.3 worked example)
+}
+
+message CaptureBaselineResponse {
+  string snapshot_key = 1;
+  string captured_at = 2;            // RFC3339
+  int32 resources_captured = 3;      // count of Deployments+Services+Pods included in the health matrix
+}
+
+message CheckRegressionRequest {
+  string environment_id = 1;
+  string snapshot_key = 2;           // must match a prior CaptureBaseline call for this environment
+}
+
+message CheckRegressionResponse {
+  bool regression_found = 1;
+  repeated string regressed_resources = 2;  // e.g. "Deployment/payments-api: readyReplicas dropped 3 -> 0"
+}
+
+message ExecValidatorRequest {
+  string environment_id = 1;
+  string validator_id = 2;
+  string validator_type = 3;   // SHELL_ASSERT | SHELL_JSON | FILE_EXISTS | FILE_CONTENT | FILE_PARSE | K8S_ASSERT
+  string run = 4;              // command / file path, per validator_type -- see contracts/activity_spec.schema.json's ValidatorSpec
+  string expect_json = 5;      // ValidatorSpec.expect, JSON-encoded -- shape varies per validator_type, not modeled field-by-field in proto
+  int32 timeout_ms = 6;        // 0 = use the executor's own default
+}
+
+message ExecValidatorResponse {
+  string status = 1;           // PASS | FAIL | ERROR
+  string observed_json = 2;    // JSON-encoded observed value, empty on ERROR
+  string error_message = 3;    // populated only when status == ERROR
+  int32 duration_ms = 4;
+}
+
+message ExecShellRequest {
+  string environment_id = 1;
+  string command = 2;          // run via `/bin/bash -c`, same as ExecValidator's SHELL_* types
+  int32 timeout_ms = 3;        // 0 = use the executor's own default
+}
+
+message ExecShellResponse {
+  int32 exit_code = 1;
+  string stdout = 2;
+  string stderr = 3;
+  string error_message = 4;    // populated only on infrastructure-level failure (pod unreachable etc), not a nonzero exit code
+  int32 duration_ms = 5;
+}

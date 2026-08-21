@@ -1,0 +1,120 @@
+id: lab.observability.scaling-infra
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Reduce Prometheus cardinality with metric_relabel_configs
+  summary: Diagnose a high-cardinality metric and drop the offending label before it's stored.
+  difficulty_level: L4
+  estimated_minutes: 30
+  locale: en
+  authors: [content-team]
+  tags: [prometheus, scaling, cardinality]
+
+curriculum:
+  primary_topic: topic.devops.observability-scaling-infra
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: observability.scaling-infra
+    weight: 1.0
+    primary: true
+    bloom: analyze
+
+prerequisites:
+  hard: [observability.alerting]
+  soft: []
+
+objectives:
+  - Identify a metric with unbounded label cardinality
+  - Drop the offending label at scrape time via metric_relabel_configs
+  - Confirm the metric's series count drops after the fix
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 2Gi
+    disk: 4Gi
+  ttl_minutes: 30
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.prometheus-high-cardinality-target.v1
+  cost_budget_usd: 0.04
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Diagnose and fix a high-cardinality metric
+    required: true
+    instructions_md: |
+      A target exposes `http_requests_total` with a `request_id` label
+      that has a unique value per request — this causes unbounded series
+      growth. Write the current series count for
+      `http_requests_total` to `~/before-count.txt`, add a
+      `metric_relabel_configs` rule dropping the `request_id` label, and
+      write the new series count to `~/after-count.txt`.
+    validators:
+      - id: v.before-count-recorded
+        type: FILE_EXISTS
+        run: "~/before-count.txt"
+        expect:
+          exists: true
+        weight: 0.2
+        on_fail: "~/before-count.txt doesn't exist yet."
+      - id: v.after-count-recorded
+        type: FILE_EXISTS
+        run: "~/after-count.txt"
+        expect:
+          exists: true
+        weight: 0.2
+        on_fail: "~/after-count.txt doesn't exist yet."
+      - id: v.cardinality-actually-reduced
+        type: SHELL_ASSERT
+        run: "test $(cat ~/after-count.txt) -lt $(cat ~/before-count.txt)"
+        expect:
+          exit_code: 0
+        weight: 0.6
+        on_fail: "The series count after the fix isn't lower than before — the metric_relabel_configs rule likely isn't dropping the label correctly."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "A label with a unique value per request (like a request_id or raw user-agent string) is the classic cardinality bomb — every unique combination creates a new time series."
+      - level: 2
+        penalty: 0.1
+        text: "scrape_configs[].metric_relabel_configs: [{source_labels: [request_id], action: labeldrop}] removes the label before storage, collapsing distinct series into one."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.80
+      task_completion: 0.10
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 9000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.observability.scaling-infra/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

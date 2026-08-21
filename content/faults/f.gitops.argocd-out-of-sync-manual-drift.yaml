@@ -1,0 +1,25 @@
+id: f.gitops.argocd-out-of-sync-manual-drift
+version: 1
+title: Cluster state diverges from Git because auto-sync was disabled
+summary: Someone applied a manual kubectl change directly to the cluster, and Argo CD's auto-sync was previously turned off, so the drift is never self-healed.
+
+targets: [gitops.argocd]
+symptom_class: OutOfSync
+skills_probed: [gitops.fluxcd-argocd]
+
+canonical_diagnostic_path:
+  - "check Argo CD Application status → shows OutOfSync"
+  - "argocd app diff → see the exact manual change vs. Git-declared state"
+  - "check Application.spec.syncPolicy.automated → confirm it's absent/disabled"
+
+expected_fix_class: [re_enable_auto_sync, manual_sync_to_reconcile]
+detectability: high
+mean_time_to_diagnose_minutes: 5
+
+params_schema:
+  application:
+    type: string
+    description: Name of the target Argo CD Application.
+
+reversible: true
+min_tier: T2_ISOLATED_MICROVM

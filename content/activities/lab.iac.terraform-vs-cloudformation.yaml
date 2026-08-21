@@ -1,0 +1,120 @@
+id: lab.iac.terraform-vs-cloudformation
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Compare a Terraform and CloudFormation resource definition
+  summary: Translate the same infrastructure resource between two declarative IaC syntaxes.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [iac, terraform, cloudformation]
+
+curriculum:
+  primary_topic: topic.devops.terraform-vs-cloudformation
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: iac.terraform-vs-cloudformation
+    weight: 1.0
+    primary: true
+    bloom: analyze
+
+prerequisites:
+  hard: [iac.fundamentals]
+  soft: []
+
+objectives:
+  - Recognise the structural differences between HCL and CloudFormation JSON
+  - Translate a Terraform resource block into an equivalent CloudFormation resource
+  - Identify what stays conceptually the same across both tools
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.terraform-bucket-example.v1
+  cost_budget_usd: 0.02
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Translate a Terraform resource to CloudFormation
+    required: true
+    instructions_md: |
+      `~/infra/main.tf` declares an `object_storage` resource named
+      `artifacts` with `versioning: true`. Write the equivalent as
+      CloudFormation-style JSON in `~/infra/template.json`, with a
+      top-level `Resources.Artifacts.Properties.Versioning` field set to
+      `true`.
+    validators:
+      - id: v.template-exists
+        type: FILE_EXISTS
+        run: "~/infra/template.json"
+        expect:
+          exists: true
+        weight: 0.2
+        on_fail: "~/infra/template.json doesn't exist yet."
+      - id: v.template-valid-json
+        type: FILE_PARSE
+        run: "~/infra/template.json"
+        expect:
+          format: json
+        weight: 0.2
+        on_fail: "template.json isn't valid JSON."
+      - id: v.template-has-versioning
+        type: SHELL_JSON
+        run: "cat ~/infra/template.json"
+        expect:
+          jsonpath: "$.Resources.Artifacts.Properties.Versioning"
+          op: "eq"
+          value: true
+        weight: 0.6
+        on_fail: "Resources.Artifacts.Properties.Versioning must be true, matching the Terraform source's versioning setting."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Both tools describe the same desired state; only the syntax and nesting differ."
+      - level: 2
+        penalty: 0.08
+        text: "Build nested JSON objects: Resources -> Artifacts -> Properties -> Versioning: true."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.iac.terraform-vs-cloudformation/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

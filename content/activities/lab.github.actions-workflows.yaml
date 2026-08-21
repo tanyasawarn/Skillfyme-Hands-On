@@ -1,0 +1,115 @@
+id: lab.github.actions-workflows
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Write a GitHub Actions workflow with a matrix build
+  summary: Author a workflow YAML that runs the same job across multiple versions in parallel.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [github-actions, ci-cd]
+
+curriculum:
+  primary_topic: topic.devops.github-actions-workflows
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: github.actions-workflows
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [gitlab.cicd-pipelines]
+  soft: []
+
+objectives:
+  - Author a GitHub Actions workflow YAML with an `on` trigger
+  - Configure a matrix strategy to run a job across multiple versions
+  - Validate the workflow file is well-formed YAML
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.git-repo-empty.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Author a matrix-build workflow
+    required: true
+    instructions_md: |
+      Create `~/repo/.github/workflows/ci.yml` triggered `on: push`, with
+      a job that uses `strategy: matrix: node-version: [16, 18, 20]`.
+    validators:
+      - id: v.workflow-file-exists
+        type: FILE_EXISTS
+        run: "~/repo/.github/workflows/ci.yml"
+        expect:
+          exists: true
+        weight: 0.2
+        on_fail: ".github/workflows/ci.yml doesn't exist yet."
+      - id: v.workflow-valid-yaml
+        type: FILE_PARSE
+        run: "~/repo/.github/workflows/ci.yml"
+        expect:
+          format: yaml
+        weight: 0.2
+        on_fail: "ci.yml isn't valid YAML."
+      - id: v.workflow-has-matrix
+        type: FILE_CONTENT
+        run: "~/repo/.github/workflows/ci.yml"
+        expect:
+          contains_all: ["matrix", "node-version"]
+        weight: 0.6
+        on_fail: "The workflow needs a strategy.matrix.node-version list to run the job across multiple Node versions in parallel."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "A matrix build runs the same job once per combination of listed values — GitHub Actions parallelizes them automatically."
+      - level: 2
+        penalty: 0.06
+        text: "Under jobs.<name>: strategy: matrix: node-version: [16, 18, 20]."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.github.actions-workflows/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

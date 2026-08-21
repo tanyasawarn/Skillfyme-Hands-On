@@ -1,0 +1,25 @@
+id: f.gitlab.protected-branch-blocks-push
+version: 1
+title: CI job fails to push a generated commit because of branch protection
+summary: A pipeline stage that auto-commits (e.g. version bump) fails because the target branch's protection rules block the CI token's push.
+
+targets: [gitlab.cicd]
+symptom_class: PushRejected
+skills_probed: [gitlab.cicd-pipelines, cicd.troubleshooting]
+
+canonical_diagnostic_path:
+  - "check pipeline job log → see 'You are not allowed to push code to protected branches'"
+  - "check Settings > Repository > Protected Branches → confirm which roles can push"
+  - "check the CI token/service account's role against that rule"
+
+expected_fix_class: [grant_push_exception, use_merge_request_flow_instead]
+detectability: high
+mean_time_to_diagnose_minutes: 5
+
+params_schema:
+  branch:
+    type: string
+    description: Name of the protected branch.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

@@ -1,0 +1,139 @@
+id: lab.git.branching-strategies
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Feature branch, merge, and resolve a conflict
+  summary: Practice the branch-work-merge cycle, including resolving a real merge conflict.
+  difficulty_level: L2
+  estimated_minutes: 30
+  locale: en
+  authors: [content-team]
+  tags: [git, branching]
+
+curriculum:
+  primary_topic: topic.devops.git-branching-strategies
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: git.branching-strategies
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [git.basics]
+  soft: []
+
+objectives:
+  - Create and work on a feature branch independently of main
+  - Merge a feature branch back into main
+  - Resolve a merge conflict correctly
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 30
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.git-repo-conflict-setup.v1
+  cost_budget_usd: 0.02
+
+surfaces: [terminal]
+
+tasks:
+  - key: t1
+    title: Create a feature branch and commit on it
+    required: true
+    instructions_md: |
+      Create a branch named `feature/login` off `main`, switch to it, and
+      add a commit that appends a line to `app.txt`.
+    validators:
+      - id: v.branch-exists
+        type: SHELL_ASSERT
+        run: "cd ~/repo && git branch --list feature/login"
+        expect:
+          exit_code: 0
+          stdout_contains: "feature/login"
+        weight: 0.4
+        on_fail: "Branch feature/login doesn't exist. Use `git branch feature/login` or `git checkout -b feature/login`."
+      - id: v.commit-on-branch
+        type: SHELL_ASSERT
+        run: "cd ~/repo && git log feature/login --oneline | wc -l | grep -qv '^0$'"
+        expect:
+          exit_code: 0
+        weight: 0.6
+        on_fail: "No new commit found on feature/login."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`git checkout -b feature/login` creates and switches to the branch in one step."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Resolve a merge conflict
+    required: true
+    instructions_md: |
+      main has also been changed to conflict with your feature branch on
+      the same line of app.txt. Merge feature/login into main, resolve the
+      conflict by keeping both changes on separate lines, and commit the
+      resolution.
+    validators:
+      - id: v.no-conflict-markers-remain
+        type: SHELL_ASSERT
+        run: "! grep -qE '^(<<<<<<<|=======|>>>>>>>)' ~/repo/app.txt"
+        expect:
+          exit_code: 0
+        weight: 0.5
+        on_fail: "app.txt still has unresolved conflict markers (<<<<<<<, =======, or >>>>>>>)."
+      - id: v.merge-completed
+        type: SHELL_ASSERT
+        run: "cd ~/repo && git log main --oneline --merges | wc -l | grep -qv '^0$'"
+        expect:
+          exit_code: 0
+        weight: 0.5
+        on_fail: "main doesn't have a merge commit yet. Complete the merge with `git commit` after resolving conflicts."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "Edit app.txt to remove the <<<<<<<, =======, >>>>>>> markers, keeping the content you want from each side."
+      - level: 2
+        penalty: 0.08
+        text: "After editing, run `git add app.txt` then `git commit` to complete the merge."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 9000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.git.branching-strategies/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

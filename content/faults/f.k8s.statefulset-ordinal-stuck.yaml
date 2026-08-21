@@ -1,0 +1,28 @@
+id: f.k8s.statefulset-ordinal-stuck
+version: 1
+title: StatefulSet rollout stuck because one ordinal pod won't become Ready
+summary: StatefulSets roll out strictly in order -- one misconfigured pod (e.g. pod-1) blocks every higher ordinal from ever updating.
+
+targets: [k8s.statefulset]
+symptom_class: RolloutStuck
+skills_probed: [k8s.statefulsets, k8s.troubleshooting]
+
+canonical_diagnostic_path:
+  - "kubectl rollout status statefulset → hangs partway through"
+  - "kubectl get pods → notice only pods below a certain ordinal have updated"
+  - "kubectl describe pod <stuck-ordinal> → find the actual readiness failure"
+
+expected_fix_class: [fix_stuck_pod_config, delete_pod_to_force_recreate]
+detectability: medium
+mean_time_to_diagnose_minutes: 8
+
+params_schema:
+  statefulset:
+    type: string
+    description: Name of the target StatefulSet.
+  stuck_ordinal:
+    type: integer
+    description: The pod ordinal index that should fail to become Ready.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

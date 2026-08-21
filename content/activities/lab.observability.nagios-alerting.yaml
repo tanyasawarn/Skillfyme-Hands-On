@@ -1,0 +1,115 @@
+id: lab.observability.nagios-alerting
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Write a Nagios-style host health check
+  summary: Author a check script following the Nagios plugin exit-code convention.
+  difficulty_level: L2
+  estimated_minutes: 20
+  locale: en
+  authors: [content-team]
+  tags: [nagios, monitoring, alerting]
+
+curriculum:
+  primary_topic: topic.devops.observability-nagios-alerting
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: observability.nagios-alerting
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [observability.prometheus-basics]
+  soft: []
+
+objectives:
+  - Follow the Nagios plugin exit-code convention (0/1/2/3)
+  - Write a disk-usage check that returns WARNING and CRITICAL correctly
+  - Verify the script's output format matches what Nagios expects
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 20
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  cost_budget_usd: 0.02
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Write a disk-usage check plugin
+    required: true
+    instructions_md: |
+      Write `~/check_disk.sh` that checks `/` usage: exit 0 (OK) if under
+      70%, exit 1 (WARNING) if 70-89%, exit 2 (CRITICAL) if 90%+ — the
+      standard Nagios plugin exit-code convention. Print a one-line status
+      message to stdout.
+    validators:
+      - id: v.script-exists-executable
+        type: SHELL_ASSERT
+        run: "test -x ~/check_disk.sh"
+        expect:
+          exit_code: 0
+        weight: 0.3
+        on_fail: "check_disk.sh doesn't exist or isn't executable."
+      - id: v.script-runs-and-exits-valid-code
+        type: SHELL_ASSERT
+        run: "~/check_disk.sh; test $? -le 3"
+        expect:
+          exit_code: 0
+        weight: 0.4
+        on_fail: "check_disk.sh should exit with one of the Nagios codes: 0 (OK), 1 (WARNING), 2 (CRITICAL), or 3 (UNKNOWN)."
+      - id: v.script-prints-output
+        type: SHELL_ASSERT
+        run: "test -n \"$(~/check_disk.sh)\""
+        expect:
+          exit_code: 0
+        weight: 0.3
+        on_fail: "check_disk.sh should print a status message to stdout, not run silently."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Nagios plugins communicate status purely through exit code + a one-line stdout message — no special API."
+      - level: 2
+        penalty: 0.08
+        text: "USAGE=$(df / | tail -1 | awk '{print $5}' | tr -d '%'); then if/elif on $USAGE against 70 and 90, echoing a message and exiting the matching code."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.observability.nagios-alerting/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

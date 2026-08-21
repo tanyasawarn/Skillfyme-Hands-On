@@ -1,0 +1,122 @@
+id: lab.k8s.resource-management
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Constrain a namespace with ResourceQuota and LimitRange
+  summary: Apply namespace-level guardrails and verify an over-limit Pod is actually rejected.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [kubernetes, resource-management]
+
+curriculum:
+  primary_topic: topic.devops.k8s.resource-management
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: k8s.resource-management
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [k8s.scheduling]
+  soft: []
+
+objectives:
+  - Apply a ResourceQuota capping total CPU/memory in a namespace
+  - Apply a LimitRange setting default per-pod requests/limits
+  - Confirm an over-quota Pod is rejected, not just warned
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Apply a ResourceQuota
+    required: true
+    instructions_md: |
+      In the `default` namespace, create a ResourceQuota named `compute-quota`
+      capping `requests.cpu` at `1` and `requests.memory` at `1Gi`.
+    validators:
+      - id: v.quota-exists
+        type: K8S_ASSERT
+        run: "kubectl get resourcequota compute-quota -o jsonpath='{.spec.hard.requests\\.cpu}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "1"
+        weight: 1.0
+        on_fail: "ResourceQuota compute-quota with requests.cpu: 1 not found."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "spec.hard.requests.cpu and spec.hard.requests.memory set the caps."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Confirm an over-quota Pod is rejected
+    required: true
+    instructions_md: |
+      Attempt to create a Pod requesting `2` CPU (over the quota). Confirm
+      the apply is actually rejected by the API server, not just a
+      scheduling warning.
+    validators:
+      - id: v.overquota-pod-rejected
+        type: SHELL_ASSERT
+        run: "! kubectl get pod overquota-demo 2>/dev/null"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        on_fail: "A pod named overquota-demo exists — it should have been rejected at creation time by the ResourceQuota, not admitted."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "A ResourceQuota is enforced by admission control at create time, not scheduling time — `kubectl apply` itself should fail with a quota-exceeded error."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.k8s.resource-management/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

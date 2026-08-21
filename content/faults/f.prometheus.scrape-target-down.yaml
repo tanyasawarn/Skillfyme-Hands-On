@@ -1,0 +1,25 @@
+id: f.prometheus.scrape-target-down
+version: 1
+title: Prometheus silently stops scraping a target due to a relabel misconfig
+summary: A metric_relabel_configs rule accidentally drops an entire target, so its metrics vanish without any obvious error in Prometheus itself.
+
+targets: [observability.prometheus]
+symptom_class: MissingMetrics
+skills_probed: [observability.prometheus-basics, observability.prometheus-advanced]
+
+canonical_diagnostic_path:
+  - "query for the expected metric → no data returned"
+  - "check Prometheus targets page → confirm the target shows as dropped, not just down"
+  - "check scrape_configs.metric_relabel_configs / relabel_configs for an overly broad drop rule"
+
+expected_fix_class: [fix_relabel_rule, remove_overzealous_drop_action]
+detectability: low
+mean_time_to_diagnose_minutes: 12
+
+params_schema:
+  job_name:
+    type: string
+    description: Name of the Prometheus scrape job to break.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

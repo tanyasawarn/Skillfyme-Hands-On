@@ -1,0 +1,28 @@
+id: f.tekton.task-missing-workspace-binding
+version: 1
+title: TaskRun fails because a required workspace binding was omitted
+summary: A Task declares a required workspace, but the TaskRun that invokes it forgets to bind it, so the pipeline fails at pod-creation time.
+
+targets: [tekton.taskrun]
+symptom_class: TaskRunCreateFailed
+skills_probed: [tekton.pipelines]
+
+canonical_diagnostic_path:
+  - "kubectl get taskrun → status shows failure before any step even runs"
+  - "kubectl describe taskrun → see 'workspace X not provided' error"
+  - "compare the Task's workspaces: declaration against the TaskRun's workspaces: bindings"
+
+expected_fix_class: [add_missing_workspace_binding]
+detectability: high
+mean_time_to_diagnose_minutes: 5
+
+params_schema:
+  taskrun:
+    type: string
+    description: Name of the target TaskRun.
+  missing_workspace:
+    type: string
+    description: Name of the workspace binding to omit.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

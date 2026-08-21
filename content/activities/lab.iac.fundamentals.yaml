@@ -1,0 +1,116 @@
+id: lab.iac.fundamentals
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Write your first Infrastructure-as-Code definition
+  summary: Describe a piece of infrastructure declaratively instead of clicking through a console.
+  difficulty_level: L1
+  estimated_minutes: 20
+  locale: en
+  authors: [content-team]
+  tags: [iac, fundamentals]
+
+curriculum:
+  primary_topic: topic.devops.iac-fundamentals
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: iac.fundamentals
+    weight: 1.0
+    primary: true
+    bloom: understand
+
+prerequisites:
+  hard: []
+  soft: [linux.cli]
+
+objectives:
+  - Explain why declarative infrastructure definitions are reproducible
+  - Author a minimal IaC-style resource definition in JSON
+  - Validate the definition is syntactically well-formed
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 20
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  cost_budget_usd: 0.02
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Define a resource declaratively
+    required: true
+    instructions_md: |
+      Create `~/infra/storage.json` describing a storage resource with
+      exactly these keys: `resource_type: "object_storage"`,
+      `name: "app-artifacts"`, `versioning_enabled: true`.
+    validators:
+      - id: v.definition-exists
+        type: FILE_EXISTS
+        run: "~/infra/storage.json"
+        expect:
+          exists: true
+        weight: 0.2
+        on_fail: "~/infra/storage.json doesn't exist yet."
+      - id: v.definition-valid-json
+        type: FILE_PARSE
+        run: "~/infra/storage.json"
+        expect:
+          format: json
+        weight: 0.3
+        on_fail: "storage.json isn't valid JSON."
+      - id: v.definition-fields-correct
+        type: SHELL_JSON
+        run: "cat ~/infra/storage.json"
+        expect:
+          jsonpath: "$.resource_type"
+          op: "eq"
+          value: "object_storage"
+        weight: 0.5
+        on_fail: "resource_type must be exactly \"object_storage\"."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Declarative means describing the desired end state as data, not commands."
+      - level: 2
+        penalty: 0.05
+        text: "Write valid JSON with the three keys given, matching the exact values in the instructions."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 5
+  token_budget: 6000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.iac.fundamentals/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

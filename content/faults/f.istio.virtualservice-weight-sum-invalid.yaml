@@ -1,0 +1,31 @@
+id: f.istio.virtualservice-weight-sum-invalid
+version: 1
+title: VirtualService route weights don't sum to 100
+summary: A canary rollout's traffic-split VirtualService has route weights that don't add up to 100, causing Istio to reject the config and fall back to old routing.
+
+targets: [istio.traffic-management]
+symptom_class: TrafficSplitNotApplied
+skills_probed: [istio.traffic-management]
+
+canonical_diagnostic_path:
+  - "observe traffic still going 100% to the old version despite the new VirtualService"
+  - "istioctl analyze → see a weight-sum validation error"
+  - "kubectl get virtualservice -o yaml → sum the route weights manually"
+
+expected_fix_class: [fix_weight_sum_to_100]
+detectability: medium
+mean_time_to_diagnose_minutes: 6
+
+params_schema:
+  virtualservice:
+    type: string
+    description: Name of the target VirtualService.
+  weight_a:
+    type: integer
+    description: First route's weight.
+  weight_b:
+    type: integer
+    description: Second route's weight (should NOT sum to 100 with weight_a).
+
+reversible: true
+min_tier: T2_ISOLATED_MICROVM

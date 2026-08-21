@@ -1,0 +1,114 @@
+id: lab.istio.traffic-management
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Route traffic between two service versions with Istio
+  summary: Author a VirtualService splitting traffic between v1 and v2 of a service.
+  difficulty_level: L4
+  estimated_minutes: 30
+  locale: en
+  authors: [content-team]
+  tags: [istio, service-mesh, traffic-management]
+
+curriculum:
+  primary_topic: topic.devops.istio-traffic-management
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: istio.traffic-management
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [k8s.troubleshooting]
+  soft: []
+
+objectives:
+  - Author an Istio VirtualService with weighted traffic splitting
+  - Route a percentage of traffic to each of two service subsets
+  - Verify the routing rule is registered by the mesh control plane
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 2Gi
+    disk: 4Gi
+  ttl_minutes: 30
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.istio-installed.v1
+    - fixture: fx.reviews-v1-v2.v1
+  cost_budget_usd: 0.04
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Split traffic 80/20 between v1 and v2
+    required: true
+    instructions_md: |
+      Author a VirtualService for the `reviews` service that sends 80% of
+      traffic to subset `v1` and 20% to subset `v2`.
+    validators:
+      - id: v.virtualservice-exists
+        type: K8S_ASSERT
+        run: "kubectl get virtualservice reviews -o jsonpath='{.spec.http[0].route[0].weight}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: 80
+        weight: 0.5
+        on_fail: "reviews VirtualService doesn't exist or its first route weight isn't 80."
+      - id: v.second-route-weight-correct
+        type: K8S_ASSERT
+        run: "kubectl get virtualservice reviews -o jsonpath='{.spec.http[0].route[1].weight}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: 20
+        weight: 0.5
+        on_fail: "The second route's weight should be 20 to complement the first route's 80."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "A VirtualService's http.route list can have multiple destinations, each with its own weight; weights across one route rule must sum to 100."
+      - level: 2
+        penalty: 0.1
+        text: "spec.http[0].route: two entries, each {destination: {host: reviews, subset: v1|v2}, weight: 80|20}."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 9000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.istio.traffic-management/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

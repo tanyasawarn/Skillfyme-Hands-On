@@ -1,0 +1,122 @@
+id: lab.k8s.services
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Expose a Deployment with a ClusterIP Service
+  summary: Create a Service that load-balances traffic across a Deployment's pods by label selector.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [kubernetes, services]
+
+curriculum:
+  primary_topic: topic.devops.k8s.services
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: k8s.services
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [k8s.deployments]
+  soft: []
+
+objectives:
+  - Author a ClusterIP Service that selects pods by label
+  - Verify the Service resolves and routes traffic to backend pods
+  - Explain how Service selectors decouple clients from individual pod IPs
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.deployment-web.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Expose the Deployment with a Service
+    required: true
+    instructions_md: |
+      A Deployment named `web` with label `app: web` is already running.
+      Create a ClusterIP Service named `web-svc` that selects `app: web`
+      and forwards port 80 to the pods' port 8080.
+    validators:
+      - id: v.service-exists
+        type: K8S_ASSERT
+        run: "kubectl get svc web-svc -o jsonpath='{.spec.type}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "ClusterIP"
+        weight: 0.3
+        on_fail: "No ClusterIP Service named web-svc found."
+      - id: v.service-selector-correct
+        type: K8S_ASSERT
+        run: "kubectl get svc web-svc -o jsonpath='{.spec.selector.app}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "web"
+        weight: 0.3
+        on_fail: "web-svc's selector should match app: web."
+      - id: v.service-has-endpoints
+        type: K8S_ASSERT
+        run: "kubectl get endpoints web-svc -o jsonpath='{.subsets[0].addresses}'"
+        expect:
+          jsonpath: "$"
+          op: "exists"
+        weight: 0.4
+        on_fail: "web-svc has no endpoints — its selector likely doesn't match any running pod's labels."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "A Service's selector must exactly match the labels on the pods you want it to route to."
+      - level: 2
+        penalty: 0.08
+        text: "kubectl expose deployment web --name=web-svc --port=80 --target-port=8080."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.k8s.services/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

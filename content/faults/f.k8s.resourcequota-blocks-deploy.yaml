@@ -1,0 +1,32 @@
+id: f.k8s.resourcequota-blocks-deploy
+version: 1
+title: Namespace ResourceQuota silently blocks a legitimate scale-up
+summary: A namespace's ResourceQuota was tightened, so a routine scale-up is admission-rejected rather than merely delayed.
+
+targets: [k8s.resource-management]
+symptom_class: QuotaExceeded
+skills_probed: [k8s.resource-management, k8s.troubleshooting]
+
+canonical_diagnostic_path:
+  - "kubectl scale deploy → command reports success but replicas don't increase"
+  - "kubectl get events → see 'exceeded quota' FailedCreate event"
+  - "kubectl describe resourcequota → compare used vs. hard limits"
+  - "kubectl get deploy -o yaml → check requested resources per replica"
+
+expected_fix_class: [increase_quota, reduce_per_pod_requests]
+detectability: low
+mean_time_to_diagnose_minutes: 9
+
+params_schema:
+  namespace:
+    type: string
+    description: Target namespace.
+  quota_name:
+    type: string
+    description: Name of the ResourceQuota to tighten.
+  hard_cpu:
+    type: string
+    description: The too-low hard CPU limit to inject.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

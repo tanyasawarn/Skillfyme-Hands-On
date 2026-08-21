@@ -1,0 +1,30 @@
+id: f.k8s.memory-limit-too-low
+version: 1
+title: Container memory limit set below actual working-set size
+summary: A container's memory limit is set too low, causing recurring OOMKilled restarts under normal load.
+
+targets: [k8s.resource-management]
+symptom_class: OOMKilled
+skills_probed: [k8s.resource-management, k8s.troubleshooting]
+
+canonical_diagnostic_path:
+  - "kubectl get pods → notice high RESTARTS count"
+  - "kubectl describe pod → see 'OOMKilled' in Last State"
+  - "kubectl top pod → compare actual memory usage against the configured limit"
+  - "kubectl get deploy -o yaml → inspect resources.limits.memory"
+
+expected_fix_class: [increase_memory_limit, reduce_memory_footprint]
+detectability: high
+mean_time_to_diagnose_minutes: 6
+
+params_schema:
+  service:
+    type: string
+    description: Name of the target Deployment.
+  limit:
+    type: string
+    description: The too-low memory limit to inject, e.g. "96Mi".
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER
+handler_implemented: true

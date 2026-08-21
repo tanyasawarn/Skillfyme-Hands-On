@@ -1,0 +1,108 @@
+id: lab.git.workflow-patterns
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Apply the GitHub Flow branching model
+  summary: Structure work using GitHub Flow — a short-lived feature branch merged straight to main.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [git, workflow, github-flow]
+
+curriculum:
+  primary_topic: topic.devops.git-workflow-patterns
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: git.workflow-patterns
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [git.branching-strategies]
+  soft: []
+
+objectives:
+  - Distinguish GitHub Flow from GitFlow's longer-lived branch structure
+  - Create a short-lived branch, commit, and merge it back to main quickly
+  - Delete the feature branch after merging, per GitHub Flow convention
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.git-repo-empty.v1
+  cost_budget_usd: 0.02
+
+surfaces: [terminal]
+
+tasks:
+  - key: t1
+    title: Ship a change via a short-lived branch
+    required: true
+    instructions_md: |
+      From main, create `feature/readme-typo`, commit a fix to
+      README.md, merge it back into main, then delete the feature branch.
+    validators:
+      - id: v.change-merged-to-main
+        type: SHELL_ASSERT
+        run: "cd ~/repo && git log main --oneline | wc -l | grep -qv '^0$'"
+        expect:
+          exit_code: 0
+        weight: 0.4
+        on_fail: "main doesn't have the new commit yet — did the merge complete?"
+      - id: v.branch-deleted
+        type: SHELL_ASSERT
+        run: "cd ~/repo && ! git branch --list feature/readme-typo | grep -q feature"
+        expect:
+          exit_code: 0
+        weight: 0.6
+        on_fail: "feature/readme-typo still exists. GitHub Flow deletes the branch right after merging — `git branch -d feature/readme-typo`."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "GitHub Flow: branch, commit, merge to main, delete the branch — all in one short cycle, no long-lived develop branch."
+      - level: 2
+        penalty: 0.06
+        text: "After merging with `git merge feature/readme-typo` on main, run `git branch -d feature/readme-typo`."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.git.workflow-patterns/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

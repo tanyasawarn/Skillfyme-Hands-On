@@ -1,0 +1,111 @@
+id: lab.git.release-management
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Tag a semantic version release
+  summary: Cut a properly formatted semantic-version release tag and generate a changelog entry.
+  difficulty_level: L2
+  estimated_minutes: 20
+  locale: en
+  authors: [content-team]
+  tags: [git, release, semver]
+
+curriculum:
+  primary_topic: topic.devops.git-release-management
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: git.release-management
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [git.workflow-patterns]
+  soft: []
+
+objectives:
+  - Apply semantic versioning rules to a release tag
+  - Create an annotated Git tag for a release
+  - Record the release in a changelog file
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 20
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.git-repo-v1.2.3.v1
+  cost_budget_usd: 0.02
+
+surfaces: [terminal]
+
+tasks:
+  - key: t1
+    title: Tag a backward-compatible feature release
+    required: true
+    instructions_md: |
+      The repo's latest tag is `v1.2.3`. You've added a new
+      backward-compatible feature. Create an annotated tag with the
+      correct next semantic version for a feature addition (not a
+      breaking change, not just a bugfix).
+    validators:
+      - id: v.correct-tag-exists
+        type: SHELL_ASSERT
+        run: "cd ~/repo && git tag --list v1.3.0"
+        expect:
+          exit_code: 0
+          stdout_contains: "v1.3.0"
+        weight: 0.6
+        on_fail: "Expected tag v1.3.0 — a backward-compatible feature bumps the MINOR version, not PATCH or MAJOR."
+      - id: v.tag-is-annotated
+        type: SHELL_ASSERT
+        run: "cd ~/repo && git cat-file -t v1.3.0 | grep -q tag"
+        expect:
+          exit_code: 0
+        weight: 0.4
+        on_fail: "v1.3.0 exists but isn't an annotated tag. Use `git tag -a v1.3.0 -m \"...\"`, not a lightweight `git tag v1.3.0`."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "SemVer format is MAJOR.MINOR.PATCH — a new backward-compatible feature increments MINOR and resets PATCH to 0."
+      - level: 2
+        penalty: 0.06
+        text: "Run `git tag -a v1.3.0 -m \"Add new feature\"`."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 7000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.git.release-management/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

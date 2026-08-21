@@ -1,0 +1,128 @@
+id: lab.k8s.helm
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Package and install a Helm chart
+  summary: Scaffold a Helm chart, template a value, and install it to the cluster.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [kubernetes, helm]
+
+curriculum:
+  primary_topic: topic.devops.k8s.helm
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: k8s.helm
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [k8s.config-secrets]
+  soft: []
+
+objectives:
+  - Scaffold a Helm chart's directory structure
+  - Parameterize a manifest value via values.yaml
+  - Install the chart and verify the release exists
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Scaffold and parameterize a chart
+    required: true
+    instructions_md: |
+      Run `helm create mychart` in `~/`. Edit `mychart/values.yaml` so
+      `replicaCount` is `3`.
+    validators:
+      - id: v.chart-scaffolded
+        type: FILE_EXISTS
+        run: "~/mychart/Chart.yaml"
+        expect:
+          exists: true
+        weight: 0.3
+        on_fail: "~/mychart doesn't exist yet. Run `helm create mychart`."
+      - id: v.replica-count-set
+        type: FILE_CONTENT
+        run: "~/mychart/values.yaml"
+        expect:
+          contains: "replicaCount: 3"
+        weight: 0.7
+        on_fail: "values.yaml's replicaCount should be set to 3."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`helm create <name>` scaffolds a standard chart directory with Chart.yaml, values.yaml, and templates/."
+      - level: 2
+        penalty: 0.06
+        text: "Edit the replicaCount: line in mychart/values.yaml to read replicaCount: 3."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Install the chart
+    required: true
+    instructions_md: |
+      Install `~/mychart` as a Helm release named `demo`.
+    validators:
+      - id: v.release-installed
+        type: SHELL_ASSERT
+        run: "helm status demo"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        on_fail: "No Helm release named demo found. Run `helm install demo ~/mychart`."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`helm install <release-name> <chart-path>`."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.k8s.helm/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

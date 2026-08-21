@@ -1,0 +1,124 @@
+id: lab.k8s.storage
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Bind a Persistent Volume Claim to storage
+  summary: Create a PVC, mount it into a pod, and verify data survives a pod restart.
+  difficulty_level: L3
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [kubernetes, storage, pvc]
+
+curriculum:
+  primary_topic: topic.devops.k8s.storage
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: k8s.storage
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [k8s.statefulsets]
+  soft: []
+
+objectives:
+  - Author a PersistentVolumeClaim and confirm it binds
+  - Mount the PVC into a pod
+  - Verify data written to the volume survives a pod restart
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Create and bind a PVC
+    required: true
+    instructions_md: |
+      Create a PersistentVolumeClaim named `data-pvc` requesting `1Gi`.
+    validators:
+      - id: v.pvc-bound
+        type: K8S_ASSERT
+        run: "kubectl get pvc data-pvc -o jsonpath='{.status.phase}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "Bound"
+        weight: 1.0
+        on_fail: "data-pvc doesn't exist or isn't Bound yet. Check `kubectl describe pvc data-pvc` for the reason."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "A PVC needs accessModes and resources.requests.storage to be satisfiable by an available StorageClass."
+      - level: 2
+        penalty: 0.06
+        text: "spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 1Gi}}}."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Verify data survives a pod restart
+    required: true
+    instructions_md: |
+      Create a Pod `storage-demo` mounting data-pvc at `/data`, write a
+      file to `/data/marker.txt`, delete and recreate the Pod, and confirm
+      the file still exists.
+    validators:
+      - id: v.marker-survives-restart
+        type: SHELL_ASSERT
+        run: "kubectl exec storage-demo -- test -f /data/marker.txt"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        on_fail: "/data/marker.txt doesn't exist after the pod restart — the PVC likely isn't actually mounted, or the pod wasn't truly recreated."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "PersistentVolumes outlive the pods that mount them — that's the whole point, unlike emptyDir."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.k8s.storage/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

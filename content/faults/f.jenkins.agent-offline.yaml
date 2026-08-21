@@ -1,0 +1,25 @@
+id: f.jenkins.agent-offline
+version: 1
+title: A labeled Jenkins agent goes offline mid-pipeline
+summary: A pipeline stage pinned to a specific agent label can't be scheduled because that agent disconnected.
+
+targets: [jenkins.distributed-builds]
+symptom_class: BuildQueuedIndefinitely
+skills_probed: [jenkins.distributed-builds, cicd.troubleshooting]
+
+canonical_diagnostic_path:
+  - "check build queue → job stuck waiting, never starts"
+  - "check Jenkins > Nodes → confirm the labeled agent shows Offline"
+  - "check agent connection logs → identify why it disconnected"
+
+expected_fix_class: [reconnect_agent, reroute_to_available_agent]
+detectability: medium
+mean_time_to_diagnose_minutes: 6
+
+params_schema:
+  agent_label:
+    type: string
+    description: Label of the agent to take offline.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

@@ -1,0 +1,117 @@
+id: lab.jenkins.basics
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Model a Jenkins freestyle job as a shell script
+  summary: Simulate a Jenkins freestyle build step by scripting the same build-test sequence.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [jenkins, ci-cd]
+
+curriculum:
+  primary_topic: topic.devops.jenkins-basics
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: jenkins.basics
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [git.release-management]
+  soft: [devops.fundamentals]
+
+objectives:
+  - Model a Jenkins freestyle job's build steps as an ordered shell script
+  - Capture a job's exit status the way Jenkins would to mark success/failure
+  - Distinguish a build step from a post-build action
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.sample-app-repo.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Script a build-then-test job
+    required: true
+    instructions_md: |
+      Write `~/job/build.sh` that runs two ordered steps against
+      `~/app`: first `echo "building"` and create `~/app/build.out`, then
+      `echo "testing"` and exit non-zero if `build.out` doesn't exist
+      (simulating a Jenkins freestyle job's sequential build steps).
+    validators:
+      - id: v.script-exists
+        type: SHELL_ASSERT
+        run: "test -x ~/job/build.sh"
+        expect:
+          exit_code: 0
+        weight: 0.3
+        on_fail: "build.sh doesn't exist or isn't executable."
+      - id: v.script-succeeds-in-order
+        type: SHELL_ASSERT
+        run: "~/job/build.sh"
+        expect:
+          exit_code: 0
+        weight: 0.4
+        on_fail: "Running build.sh should exit 0 when the build step runs before the test step."
+      - id: v.build-artifact-created
+        type: FILE_EXISTS
+        run: "~/app/build.out"
+        expect:
+          exists: true
+        weight: 0.3
+        on_fail: "app/build.out should be created by the build step before the test step checks for it."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "A Jenkins freestyle job runs its build steps top-to-bottom, each one gating the next."
+      - level: 2
+        penalty: 0.06
+        text: "Step 1: `touch ~/app/build.out`. Step 2: `test -f ~/app/build.out || exit 1`."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, build_failures, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.jenkins.basics/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

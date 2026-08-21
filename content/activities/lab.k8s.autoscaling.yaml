@@ -1,0 +1,102 @@
+id: lab.k8s.autoscaling
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Configure a Horizontal Pod Autoscaler
+  summary: Wire an HPA to a Deployment with CPU-based scaling thresholds.
+  difficulty_level: L3
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [kubernetes, autoscaling, hpa]
+
+curriculum:
+  primary_topic: topic.devops.k8s.autoscaling
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: k8s.autoscaling
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [k8s.production-deployments]
+  soft: []
+
+objectives:
+  - Author an HPA targeting a Deployment
+  - Set min/max replica bounds and a CPU utilization target
+  - Verify the HPA registers and reports a status
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.deployment-web.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Create an HPA for the web Deployment
+    required: true
+    instructions_md: |
+      Create a HorizontalPodAutoscaler targeting the `web` Deployment,
+      with `minReplicas: 2`, `maxReplicas: 6`, and a target CPU
+      utilization of `70`.
+    validators:
+      - id: v.hpa-exists-correct-bounds
+        type: K8S_ASSERT
+        run: "kubectl get hpa web -o jsonpath='{.spec.minReplicas}-{.spec.maxReplicas}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "2-6"
+        weight: 1.0
+        on_fail: "HPA web doesn't exist, or its minReplicas/maxReplicas aren't 2 and 6."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`kubectl autoscale deployment web --min=2 --max=6 --cpu-percent=70`."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.80
+      task_completion: 0.10
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 5
+  token_budget: 7000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.k8s.autoscaling/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

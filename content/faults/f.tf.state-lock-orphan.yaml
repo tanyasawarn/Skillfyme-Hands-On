@@ -1,0 +1,30 @@
+# Doc §3.4's third named worked example, transcribed as content.
+id: f.tf.state-lock-orphan
+version: 1
+title: Orphaned Terraform state lock blocks every apply
+summary: A previous run crashed mid-apply, leaving a stale state lock that now blocks every subsequent plan/apply with no obvious cause.
+
+targets: [terraform.state]
+symptom_class: StateLocked
+skills_probed: [terraform.state-management]
+
+canonical_diagnostic_path:
+  - "terraform plan → fails immediately with 'Error acquiring the state lock'"
+  - "read the lock error → note the Lock ID and who/when it was acquired"
+  - "confirm no other real process is actually running (check CI history/teammates)"
+  - "terraform force-unlock <lock-id> only after confirming it's genuinely orphaned"
+
+expected_fix_class: [force_unlock_after_verification, wait_for_legitimate_holder]
+detectability: high
+mean_time_to_diagnose_minutes: 8
+
+params_schema:
+  workspace:
+    type: string
+    description: Name of the target Terraform workspace/state.
+  lock_id:
+    type: string
+    description: The stale lock ID to inject.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

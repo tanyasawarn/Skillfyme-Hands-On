@@ -1,0 +1,28 @@
+id: f.docker.swarm-service-image-pull-fail
+version: 1
+title: Swarm service replicas fail because the registry credentials expired
+summary: An existing Docker Swarm service's replicas start failing to pull a fresh image because its registry auth token has expired.
+
+targets: [docker.swarm]
+symptom_class: ServiceReplicasNotConverging
+skills_probed: [docker.swarm]
+
+canonical_diagnostic_path:
+  - "docker service ps <svc> → notice tasks stuck in Pending/Rejected"
+  - "docker service ps --no-trunc <svc> → see the actual pull-auth error"
+  - "docker login <registry> → confirm credentials are actually expired"
+
+expected_fix_class: [refresh_registry_credentials, recreate_registry_secret]
+detectability: medium
+mean_time_to_diagnose_minutes: 8
+
+params_schema:
+  service:
+    type: string
+    description: Name of the target Swarm service.
+  registry:
+    type: string
+    description: The registry whose credentials should be invalidated.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

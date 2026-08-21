@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.practiceengine.internal/events/envelope.schema.json",
+  "title": "AttemptEventEnvelope",
+  "description": "Envelope for every row in attempt_events. Doc §4.2. seq is assigned by the event-store writer (Dev B), never by producers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["attempt_id", "occurred_at", "actor", "type", "payload"],
+  "properties": {
+    "attempt_id": { "type": "string", "format": "uuid" },
+    "seq": { "type": "integer", "minimum": 1, "description": "assigned at write time, absent on the wire from producers" },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "actor": { "type": "string", "enum": ["LEARNER", "SYSTEM", "VALIDATOR", "AI", "ADMIN"] },
+    "type": { "type": "string", "description": "see contracts/events.md taxonomy table" },
+    "payload": { "type": "object" }
+  }
+}

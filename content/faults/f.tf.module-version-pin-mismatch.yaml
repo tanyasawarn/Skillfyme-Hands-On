@@ -1,0 +1,31 @@
+id: f.tf.module-version-pin-mismatch
+version: 1
+title: Two callers of the same module pin incompatible versions
+summary: Two workspaces reference the same reusable module but with different version constraints, so one silently gets breaking-change behavior.
+
+targets: [terraform.modules]
+symptom_class: UnexpectedResourceBehavior
+skills_probed: [terraform.modules-workspaces]
+
+canonical_diagnostic_path:
+  - "compare outcomes between the two workspaces for the 'same' module call"
+  - "terraform init -upgrade → notice different resolved module versions"
+  - "check each workspace's version constraint string"
+
+expected_fix_class: [align_version_constraints, pin_explicit_version]
+detectability: low
+mean_time_to_diagnose_minutes: 12
+
+params_schema:
+  module_source:
+    type: string
+    description: Source path/registry address of the shared module.
+  version_a:
+    type: string
+    description: Version constraint for the first workspace.
+  version_b:
+    type: string
+    description: Conflicting version constraint for the second workspace.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

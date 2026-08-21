@@ -1,0 +1,114 @@
+id: lab.cloud.zero-trust-security
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Apply a default-deny NetworkPolicy
+  summary: Lock down a namespace to zero-trust defaults, then open only the one required path.
+  difficulty_level: L3
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [zero-trust, security, kubernetes]
+
+curriculum:
+  primary_topic: topic.devops.cloud-zero-trust-security
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: cloud.zero-trust-security
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [cloud.progressive-delivery]
+  soft: []
+
+objectives:
+  - Apply a default-deny-all NetworkPolicy to a namespace
+  - Add a narrow allow rule for exactly the traffic that's actually needed
+  - Verify unrelated traffic is still blocked after the allow rule
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.frontend-backend-pods.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Deny all, then allow only frontend-to-backend
+    required: true
+    instructions_md: |
+      Apply a default-deny-all NetworkPolicy to the `default` namespace.
+      Then add a second policy allowing only pods labeled `app: frontend`
+      to reach pods labeled `app: backend` on port 8080.
+    validators:
+      - id: v.default-deny-exists
+        type: K8S_ASSERT
+        run: "kubectl get networkpolicy default-deny -o jsonpath='{.spec.podSelector}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "{}"
+        weight: 0.3
+        on_fail: "No default-deny NetworkPolicy with an empty podSelector (applies to all pods) found."
+      - id: v.allow-frontend-backend-exists
+        type: K8S_ASSERT
+        run: "kubectl get networkpolicy allow-frontend-to-backend -o jsonpath='{.spec.podSelector.matchLabels.app}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "backend"
+        weight: 0.7
+        on_fail: "No NetworkPolicy named allow-frontend-to-backend selecting app: backend pods found."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Zero trust starts with deny-all, then adds narrow exceptions — never the other way around."
+      - level: 2
+        penalty: 0.08
+        text: "default-deny: empty podSelector {}, policyTypes [Ingress], no ingress rules. Second policy: podSelector matching app: backend, ingress from podSelector app: frontend on port 8080."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.cloud.zero-trust-security/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

@@ -1,0 +1,115 @@
+id: lab.k8s.troubleshooting
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Diagnose and fix a CrashLoopBackOff Pod
+  summary: Use kubectl describe/logs to find the root cause of a failing pod and fix it.
+  difficulty_level: L3
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [kubernetes, troubleshooting]
+
+curriculum:
+  primary_topic: topic.devops.k8s.troubleshooting
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: k8s.troubleshooting
+    weight: 1.0
+    primary: true
+    bloom: analyze
+
+prerequisites:
+  hard: [k8s.autoscaling]
+  soft: []
+
+objectives:
+  - Use kubectl describe to identify why a Pod won't stay Running
+  - Read a container's logs to find the actual crash reason
+  - Apply the fix and confirm the Pod stabilizes
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.pod-crashloop.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Fix the crash-looping Pod
+    required: true
+    instructions_md: |
+      A Pod named `broken-app` is stuck in CrashLoopBackOff. Diagnose the
+      root cause with `kubectl describe` and `kubectl logs`, fix the
+      underlying manifest or config issue, and get the Pod to a stable
+      Running state.
+    validators:
+      - id: v.pod-running-stable
+        type: K8S_ASSERT
+        run: "kubectl get pod broken-app -o jsonpath='{.status.phase}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "Running"
+        weight: 0.6
+        on_fail: "broken-app still isn't Running. `kubectl logs broken-app` shows the actual application error."
+      - id: v.pod-not-restarting
+        type: K8S_ASSERT
+        run: "kubectl get pod broken-app -o jsonpath='{.status.containerStatuses[0].restartCount}'"
+        expect:
+          jsonpath: "$"
+          op: "lt"
+          value: 5
+        weight: 0.4
+        on_fail: "broken-app has restarted many times — the underlying issue likely isn't actually fixed yet, just temporarily Running."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "`kubectl describe pod broken-app` shows recent events; `kubectl logs broken-app --previous` shows the crashed container's own output."
+      - level: 2
+        penalty: 0.1
+        text: "Common CrashLoopBackOff causes: wrong command/entrypoint, missing required env var, or a failing readiness/liveness probe misconfigured too aggressively."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.80
+      task_completion: 0.10
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 9000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.k8s.troubleshooting/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

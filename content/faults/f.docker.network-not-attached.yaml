@@ -1,0 +1,28 @@
+id: f.docker.network-not-attached
+version: 1
+title: Two containers meant to talk are on different Docker networks
+summary: A client container was started without --network, landing it on the default bridge while the server it needs sits on a custom network.
+
+targets: [docker.networking]
+symptom_class: ConnectionRefused
+skills_probed: [docker.networking]
+
+canonical_diagnostic_path:
+  - "curl from client to server → connection refused / name not resolvable"
+  - "docker network inspect <custom-net> → confirm server is attached, client is not"
+  - "docker inspect client --format '{{.NetworkSettings.Networks}}' → confirm it's on the default bridge"
+
+expected_fix_class: [reattach_to_correct_network, recreate_with_correct_network_flag]
+detectability: high
+mean_time_to_diagnose_minutes: 6
+
+params_schema:
+  client_container:
+    type: string
+    description: Name of the misattached client container.
+  correct_network:
+    type: string
+    description: The network the client should actually be on.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

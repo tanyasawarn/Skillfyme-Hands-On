@@ -1,0 +1,136 @@
+id: lab.docker.basics
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Write and build your first Dockerfile
+  summary: Author a minimal Dockerfile and build a tagged image from it.
+  difficulty_level: L1
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [docker, fundamentals]
+
+curriculum:
+  primary_topic: topic.devops.docker-basics
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: docker.basics
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [linux.cli]
+  soft: [cicd.troubleshooting]
+
+objectives:
+  - Write a minimal Dockerfile using FROM, COPY, and CMD
+  - Build a tagged image from that Dockerfile
+  - Inspect image metadata after building
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.docker.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.static-site-app.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Author a Dockerfile
+    required: true
+    instructions_md: |
+      In `~/app`, write a `Dockerfile` that starts `FROM alpine:3.19`,
+      copies `index.html` into `/srv`, and sets `CMD` to serve it (any
+      valid CMD is fine — this task checks the Dockerfile's structure).
+    validators:
+      - id: v.dockerfile-exists
+        type: FILE_EXISTS
+        run: "~/app/Dockerfile"
+        expect:
+          exists: true
+        weight: 0.2
+        on_fail: "~/app/Dockerfile doesn't exist yet."
+      - id: v.dockerfile-has-from
+        type: FILE_CONTENT
+        run: "~/app/Dockerfile"
+        expect:
+          contains: "FROM alpine"
+        weight: 0.3
+        on_fail: "Dockerfile should start with FROM alpine:3.19."
+      - id: v.dockerfile-has-copy-and-cmd
+        type: FILE_CONTENT
+        run: "~/app/Dockerfile"
+        expect:
+          contains_all: ["COPY", "CMD"]
+        weight: 0.5
+        on_fail: "Dockerfile needs both a COPY instruction (to add index.html) and a CMD instruction (to run something)."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Every Dockerfile needs a base image (FROM) before anything else."
+      - level: 2
+        penalty: 0.06
+        text: "FROM alpine:3.19 / COPY index.html /srv/index.html / CMD [\"httpd\", \"-f\"]."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Build a tagged image
+    required: true
+    instructions_md: |
+      Build the image from `~/app` and tag it `static-site:v1`.
+    validators:
+      - id: v.image-built
+        type: SHELL_ASSERT
+        run: "docker image inspect static-site:v1"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        on_fail: "No image tagged static-site:v1 found. Run `docker build -t static-site:v1 .` from ~/app."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`docker build -t <name>:<tag> <context-dir>`."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count, build_failures]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.docker.basics/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

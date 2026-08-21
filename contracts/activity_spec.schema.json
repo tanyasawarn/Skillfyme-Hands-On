@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.practiceengine.internal/activity_spec.schema.json",
+  "title": "ActivitySpec",
+  "description": "Doc §3.2. This is the frozen contract for activity_version.spec_jsonb — changes require joint PR approval per PLAN.md 'conflict-minimizing rules'. Authored as YAML in Git (content-as-code, D4), projected into this JSON Schema for CI lint (§3.5 step 1) and Postgres JSONB storage.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "version", "mode", "status", "meta", "curriculum", "skills", "environment", "tasks", "completion", "scoring"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$" },
+    "version": { "type": "integer", "minimum": 1 },
+    "mode": { "type": "string", "enum": ["GUIDED_LAB", "PRODUCTION_SIM", "PROJECT"] },
+    "status": { "type": "string", "enum": ["DRAFT", "IN_REVIEW", "APPROVED", "PUBLISHED", "CANARY", "DEPRECATED", "RETIRED", "ROLLED_BACK"] },
+
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "summary", "difficulty_level", "estimated_minutes"],
+      "properties": {
+        "title": { "type": "string" },
+        "summary": { "type": "string" },
+        "difficulty_level": { "type": "string", "enum": ["L1", "L2", "L3", "L4", "L5"] },
+        "estimated_minutes": { "type": "integer", "minimum": 1 },
+        "locale": { "type": "string", "default": "en" },
+        "authors": { "type": "array", "items": { "type": "string" } },
+        "tags": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "curriculum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary_topic"],
+      "properties": {
+        "primary_topic": { "type": "string" },
+        "also_relevant": { "type": "array", "items": { "type": "string" } },
+        "courses": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "skills": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["skill", "weight", "primary"],
+        "properties": {
+          "skill": { "type": "string" },
+          "weight": { "type": "number", "minimum": 0, "maximum": 1 },
+          "primary": { "type": "boolean" },
+          "bloom": { "type": "string", "enum": ["remember", "understand", "apply", "analyze", "evaluate", "create"] }
+        }
+      }
+    },
+
+    "prerequisites": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "hard": { "type": "array", "items": { "type": "string" } },
+        "soft": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "objectives": { "type": "array", "items": { "type": "string" } },
+
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tier", "blueprint", "cost_budget_usd"],
+      "properties": {
+        "tier": { "type": "string", "enum": ["BROWSER", "SHARED_CONTAINER", "ISOLATED_VM", "CLOUD_ACCOUNT"] },
+        "blueprint": { "type": "string" },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": { "type": "string" },
+            "memory": { "type": "string" },
+            "disk": { "type": "string" }
+          }
+        },
+        "ttl_minutes": { "type": "integer", "minimum": 1 },
+        "idle_timeout_minutes": { "type": "integer", "minimum": 1 },
+        "network_policy": { "type": "string" },
+        "seed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["fixture"],
+            "properties": { "fixture": { "type": "string" } }
+          }
+        },
+        "cost_budget_usd": { "type": "number", "minimum": 0 }
+      }
+    },
+
+    "surfaces": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["terminal", "editor", "k8s_dashboard_readonly", "preview"] }
+    },
+
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "title", "required", "instructions_md", "validators"],
+        "properties": {
+          "key": { "type": "string" },
+          "title": { "type": "string" },
+          "required": { "type": "boolean" },
+          "instructions_md": { "type": "string" },
+          "validators": {
+            "type": "array",
+            "minItems": 1,
+            "description": "§3.5 CI lint step 1: every task must have >=1 validator",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "type", "expect", "weight", "on_fail"],
+              "properties": {
+                "id": { "type": "string" },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "SHELL_ASSERT", "SHELL_JSON", "FILE_EXISTS", "FILE_CONTENT", "FILE_PARSE",
+                    "K8S_ASSERT", "K8S_EVENT_ABSENT", "HTTP_PROBE", "HTTP_SLO", "CLOUD_ASSERT",
+                    "IAC_STATE", "DB_QUERY", "TEST_SUITE", "STATIC_ANALYSIS", "PERF_BENCH",
+                    "CHAOS_PROBE", "TELEMETRY_ASSERT", "NO_REGRESSION", "AI_RUBRIC"
+                  ]
+                },
+                "run": { "type": "string" },
+                "expect": { "type": "object" },
+                "weight": { "type": "number", "minimum": 0, "maximum": 1 },
+                "severity": { "type": "string", "enum": ["BLOCKING", "WARN"], "default": "BLOCKING" },
+                "on_fail": { "type": "string", "minLength": 1, "description": "required field per §3.2 design notes: generic failure text is the #1 cause of lab abandonment" },
+                "timeout_ms": { "type": "integer", "minimum": 1 },
+                "retry": { "type": "object" }
+              }
+            }
+          },
+          "hints": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["level", "penalty", "text"],
+              "properties": {
+                "level": { "type": "integer", "minimum": 1 },
+                "penalty": { "type": "number", "minimum": 0, "maximum": 1 },
+                "text": { "type": "string" }
+              }
+            }
+          },
+          "solution_apply": { "type": "string", "description": "path to idempotent script that forces post-task state, §1.3.1" },
+          "telemetry_signals": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule"],
+      "properties": {
+        "rule": { "type": "string", "enum": ["ALL_REQUIRED_TASKS_PASS"] },
+        "min_score": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+
+    "scoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile"],
+      "properties": {
+        "profile": { "type": "string" },
+        "overrides": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "weights": { "type": "object", "additionalProperties": { "type": "number" } }
+          }
+        }
+      }
+    },
+
+    "ai_mentor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "persona": { "type": "string", "enum": ["tutor", "senior_engineer", "reviewer"] },
+        "max_hints": { "type": "integer", "minimum": 0 },
+        "token_budget": { "type": "integer", "minimum": 0 },
+        "solution_visibility": { "type": "string", "enum": ["HIDDEN", "AFTER_SUBMIT", "ALWAYS"] },
+        "policy": { "type": "string" }
+      }
+    },
+
+    "reference_solution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repo_path": { "type": "string" },
+        "visibility": { "type": "string", "enum": ["HIDDEN", "AFTER_PASS_OR_EXHAUST", "AFTER_SUBMIT"] }
+      }
+    },
+
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resume_window_days": { "type": "integer", "minimum": 1 },
+        "max_attempts": { "type": ["integer", "null"] },
+        "retire_after": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

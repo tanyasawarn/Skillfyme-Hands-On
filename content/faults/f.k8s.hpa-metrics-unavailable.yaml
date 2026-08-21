@@ -1,0 +1,26 @@
+id: f.k8s.hpa-metrics-unavailable
+version: 1
+title: HPA can't scale because metrics-server is unreachable
+summary: An HPA is correctly configured but silently fails to scale because the metrics API it depends on is unavailable.
+
+targets: [k8s.autoscaling]
+symptom_class: MetricsUnavailable
+skills_probed: [k8s.autoscaling, k8s.troubleshooting]
+
+canonical_diagnostic_path:
+  - "kubectl get hpa → see TARGETS column showing <unknown>"
+  - "kubectl describe hpa → see 'unable to fetch metrics' event"
+  - "kubectl top pods → confirm the metrics API itself is failing"
+  - "kubectl get apiservices | grep metrics → check metrics-server registration/health"
+
+expected_fix_class: [restore_metrics_server, fix_metrics_api_registration]
+detectability: low
+mean_time_to_diagnose_minutes: 10
+
+params_schema:
+  hpa:
+    type: string
+    description: Name of the target HorizontalPodAutoscaler.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

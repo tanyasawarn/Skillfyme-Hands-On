@@ -1,0 +1,25 @@
+id: f.jaeger.missing-trace-context-propagation
+version: 1
+title: A service hop drops trace context, breaking end-to-end tracing
+summary: One service in a call chain doesn't forward trace headers, so traces appear as disconnected fragments instead of one end-to-end trace.
+
+targets: [observability.tracing]
+symptom_class: TraceFragmented
+skills_probed: [observability.tracing]
+
+canonical_diagnostic_path:
+  - "look up a known request in Jaeger → see two separate traces instead of one"
+  - "check the middle service's outbound calls for trace header propagation"
+  - "compare with a service that correctly forwards headers, for contrast"
+
+expected_fix_class: [add_trace_header_propagation, use_instrumentation_middleware]
+detectability: medium
+mean_time_to_diagnose_minutes: 11
+
+params_schema:
+  service:
+    type: string
+    description: Name of the service that should stop propagating trace context.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

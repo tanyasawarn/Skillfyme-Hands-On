@@ -1,0 +1,25 @@
+id: f.istio.mtls-mode-mismatch
+version: 1
+title: PeerAuthentication and DestinationRule TLS modes conflict
+summary: A namespace enforces STRICT mTLS but one service's DestinationRule still specifies DISABLE, causing that service's calls to fail with connection resets.
+
+targets: [istio.security]
+symptom_class: ConnectionResetByPeer
+skills_probed: [istio.mtls-security]
+
+canonical_diagnostic_path:
+  - "curl between services → connection reset, not a clean 4xx/5xx"
+  - "kubectl get peerauthentication -A -o yaml → confirm STRICT mTLS is enforced"
+  - "kubectl get destinationrule -o yaml → check trafficPolicy.tls.mode for the failing service"
+
+expected_fix_class: [align_destinationrule_tls_mode, remove_conflicting_override]
+detectability: medium
+mean_time_to_diagnose_minutes: 9
+
+params_schema:
+  destinationrule:
+    type: string
+    description: Name of the target DestinationRule.
+
+reversible: true
+min_tier: T2_ISOLATED_MICROVM

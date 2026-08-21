@@ -1,0 +1,110 @@
+id: lab.k8s.statefulsets
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Deploy a StatefulSet with stable pod identity
+  summary: Run a StatefulSet and verify its pods get stable, ordinal-indexed names.
+  difficulty_level: L3
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [kubernetes, statefulsets]
+
+curriculum:
+  primary_topic: topic.devops.k8s.statefulsets
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: k8s.statefulsets
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [k8s.helm]
+  soft: []
+
+objectives:
+  - Author a StatefulSet manifest with a headless Service
+  - Verify pods get stable, ordinal-indexed names (pod-0, pod-1, ...)
+  - Explain why StatefulSets, not Deployments, are used for stateful workloads
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Deploy a StatefulSet with stable identities
+    required: true
+    instructions_md: |
+      Create a headless Service `db-svc` and a StatefulSet `db` with 3
+      replicas using `serviceName: db-svc`, any simple image.
+    validators:
+      - id: v.statefulset-three-replicas
+        type: K8S_ASSERT
+        run: "kubectl get statefulset db -o jsonpath='{.spec.replicas}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: 3
+        weight: 0.3
+        on_fail: "StatefulSet db doesn't exist or doesn't have 3 replicas."
+      - id: v.pods-have-ordinal-names
+        type: K8S_ASSERT
+        run: "kubectl get pod db-0"
+        expect:
+          exit_code: 0
+        weight: 0.7
+        on_fail: "Expected a pod literally named db-0 — StatefulSet pods get stable ordinal-indexed names, unlike Deployment pods with random suffixes."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Unlike a Deployment, a StatefulSet requires serviceName pointing to a headless Service (clusterIP: None)."
+      - level: 2
+        penalty: 0.08
+        text: "The headless Service just needs clusterIP: None and a selector matching the StatefulSet's pod labels."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.k8s.statefulsets/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

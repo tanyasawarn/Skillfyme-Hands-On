@@ -1,0 +1,124 @@
+id: lab.gitops.fluxcd-argocd
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Sync an Argo CD Application from a Git repo
+  summary: Register a Git-tracked manifest with Argo CD and trigger an automated sync.
+  difficulty_level: L3
+  estimated_minutes: 30
+  locale: en
+  authors: [content-team]
+  tags: [gitops, argocd, fluxcd]
+
+curriculum:
+  primary_topic: topic.devops.gitops-fluxcd-argocd
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: gitops.fluxcd-argocd
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [tekton.pipelines]
+  soft: []
+
+objectives:
+  - Register a Git repo as an Argo CD Application source
+  - Trigger a sync so the cluster state matches the Git-declared state
+  - Confirm the Application reports Synced and Healthy
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 2Gi
+    disk: 4Gi
+  ttl_minutes: 30
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.argocd-installed.v1
+    - fixture: fx.gitops-manifest-repo.v1
+  cost_budget_usd: 0.04
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Register and sync an Argo CD Application
+    required: true
+    instructions_md: |
+      Create an Argo CD Application named `demo-app` pointing at the
+      seeded Git repo (`~/gitops-repo`), targeting the `default`
+      namespace. Trigger a sync and confirm it reaches Synced/Healthy.
+    validators:
+      - id: v.application-exists
+        type: K8S_ASSERT
+        run: "kubectl get application demo-app -n argocd -o jsonpath='{.metadata.name}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "demo-app"
+        weight: 0.3
+        on_fail: "Application demo-app doesn't exist in the argocd namespace."
+      - id: v.application-synced
+        type: K8S_ASSERT
+        run: "kubectl get application demo-app -n argocd -o jsonpath='{.status.sync.status}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "Synced"
+        weight: 0.4
+        on_fail: "demo-app's sync status isn't Synced yet. Run `argocd app sync demo-app` or wait for auto-sync."
+      - id: v.application-healthy
+        type: K8S_ASSERT
+        run: "kubectl get application demo-app -n argocd -o jsonpath='{.status.health.status}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "Healthy"
+        weight: 0.3
+        on_fail: "demo-app's health status isn't Healthy. Check the deployed resources with `kubectl get all -n default`."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "GitOps means the cluster continuously reconciles toward what's declared in Git — Argo CD is the controller doing that reconciliation."
+      - level: 2
+        penalty: 0.1
+        text: "spec.source.repoURL/path pointing at the seeded repo, spec.destination.namespace: default, spec.syncPolicy.automated: {} for auto-sync."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 9000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.gitops.fluxcd-argocd/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

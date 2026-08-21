@@ -1,0 +1,29 @@
+# Doc §3.4's own second worked example, transcribed verbatim as content.
+id: f.iam.missing-ecr-pull
+version: 1
+title: Missing image-pull IAM permission
+summary: A pod's service account lacks the IAM permission/annotation needed to pull from the container registry.
+
+targets: [aws.iam, k8s.imagepull]
+symptom_class: ErrImagePull
+skills_probed: [cloud.aws-core-services, k8s.troubleshooting]
+
+canonical_diagnostic_path:
+  - "kubectl describe pod → see ErrImagePull / 403"
+  - "check node/pod IAM role → aws sts get-caller-identity"
+  - "check ECR repository policy / IRSA annotation"
+
+expected_fix_class: [attach_policy, add_irsa_annotation, add_imagepullsecret]
+detectability: medium
+mean_time_to_diagnose_minutes: 12
+
+params_schema:
+  service:
+    type: string
+    description: Name of the target Deployment/ServiceAccount pair.
+  registry:
+    type: string
+    description: The registry host the pull is failing against.
+
+reversible: true
+min_tier: T2_ISOLATED_MICROVM

@@ -1,0 +1,142 @@
+id: lab.ansible.basics
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Write and run your first Ansible playbook
+  summary: Author a playbook that installs a package and starts a service, then run it locally.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [ansible, configuration-management]
+
+curriculum:
+  primary_topic: topic.devops.ansible-basics
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: ansible.basics
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [iac.fundamentals]
+  soft: [linux.cli]
+
+objectives:
+  - Author a playbook with an ordered list of tasks
+  - Target localhost as the managed host
+  - Run the playbook and confirm it completes without errors
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  cost_budget_usd: 0.02
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Write a two-task playbook
+    required: true
+    instructions_md: |
+      Write `~/playbook.yml` with `hosts: localhost`, and two tasks: one
+      that creates a directory `/tmp/ansible-demo`, one that creates a
+      file `/tmp/ansible-demo/marker.txt` inside it.
+    validators:
+      - id: v.playbook-exists
+        type: FILE_EXISTS
+        run: "~/playbook.yml"
+        expect:
+          exists: true
+        weight: 0.2
+        on_fail: "~/playbook.yml doesn't exist yet."
+      - id: v.playbook-valid-yaml
+        type: FILE_PARSE
+        run: "~/playbook.yml"
+        expect:
+          format: yaml
+        weight: 0.2
+        on_fail: "playbook.yml isn't valid YAML."
+      - id: v.playbook-targets-localhost
+        type: FILE_CONTENT
+        run: "~/playbook.yml"
+        expect:
+          contains: "hosts: localhost"
+        weight: 0.6
+        on_fail: "The playbook should target hosts: localhost."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "A playbook is a YAML list of plays; each play has hosts: and a tasks: list."
+      - level: 2
+        penalty: 0.08
+        text: "Use the file and copy modules for the two tasks — each task has a name: and a module: {args}."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Run the playbook successfully
+    required: true
+    instructions_md: |
+      Run `~/playbook.yml` with `ansible-playbook` and confirm both the
+      directory and file exist afterward.
+    validators:
+      - id: v.directory-created
+        type: SHELL_ASSERT
+        run: "test -d /tmp/ansible-demo"
+        expect:
+          exit_code: 0
+        weight: 0.5
+        on_fail: "/tmp/ansible-demo doesn't exist — did the playbook actually run?"
+      - id: v.file-created
+        type: SHELL_ASSERT
+        run: "test -f /tmp/ansible-demo/marker.txt"
+        expect:
+          exit_code: 0
+        weight: 0.5
+        on_fail: "/tmp/ansible-demo/marker.txt doesn't exist."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "`ansible-playbook playbook.yml` executes the playbook against the target hosts."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.ansible.basics/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

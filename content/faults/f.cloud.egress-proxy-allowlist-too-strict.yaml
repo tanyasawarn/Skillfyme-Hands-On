@@ -1,0 +1,28 @@
+id: f.cloud.egress-proxy-allowlist-too-strict
+version: 1
+title: A legitimate outbound dependency is missing from the egress allowlist
+summary: A workload needs to call an external API, but the platform's egress proxy allowlist doesn't include that domain, so calls fail with a proxy-level block rather than an app error.
+
+targets: [cloud.networking]
+symptom_class: EgressBlocked
+skills_probed: [cloud.zero-trust-security, cloud.api-container-security]
+
+canonical_diagnostic_path:
+  - "app logs → outbound call fails with a 403 from the proxy, not the target API"
+  - "check egress proxy access logs → confirm the domain was denied by policy"
+  - "check the platform's egress allowlist configuration for that namespace/workload"
+
+expected_fix_class: [add_domain_to_allowlist, request_allowlist_exception]
+detectability: medium
+mean_time_to_diagnose_minutes: 8
+
+params_schema:
+  namespace:
+    type: string
+    description: Target namespace whose egress policy applies.
+  blocked_domain:
+    type: string
+    description: The legitimate domain that should be missing from the allowlist.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

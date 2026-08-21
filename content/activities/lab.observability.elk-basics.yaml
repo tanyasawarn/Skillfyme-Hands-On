@@ -1,0 +1,117 @@
+id: lab.observability.elk-basics
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Index and search logs with Elasticsearch
+  summary: Push a log line into Elasticsearch and retrieve it with a search query.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [elasticsearch, elk, logging]
+
+curriculum:
+  primary_topic: topic.devops.observability-elk-basics
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: observability.elk-basics
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [observability.nagios-alerting]
+  soft: []
+
+objectives:
+  - Index a document into Elasticsearch via its HTTP API
+  - Search for that document by field value
+  - Understand indexing and search as the core ELK primitives
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.elasticsearch-running.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal]
+
+tasks:
+  - key: t1
+    title: Index and search a log entry
+    required: true
+    instructions_md: |
+      Index a document into the `app-logs` index with fields
+      `{"level": "error", "message": "connection refused"}`. Then search
+      `app-logs` for documents where `level` is `error` and write the
+      matching document count to `~/error-count.txt`.
+    validators:
+      - id: v.document-indexed
+        type: SHELL_ASSERT
+        run: "curl -sf localhost:9200/app-logs/_count | grep -q '\"count\":[1-9]'"
+        expect:
+          exit_code: 0
+        weight: 0.4
+        on_fail: "app-logs index doesn't have any documents yet. Index one via POST localhost:9200/app-logs/_doc."
+      - id: v.count-file-exists
+        type: FILE_EXISTS
+        run: "~/error-count.txt"
+        expect:
+          exists: true
+        weight: 0.3
+        on_fail: "~/error-count.txt doesn't exist yet."
+      - id: v.count-nonzero
+        type: SHELL_ASSERT
+        run: "test $(cat ~/error-count.txt) -ge 1"
+        expect:
+          exit_code: 0
+        weight: 0.3
+        on_fail: "error-count.txt should contain a count of at least 1."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "curl -X POST localhost:9200/app-logs/_doc -H 'Content-Type: application/json' -d '{...}' indexes a document."
+      - level: 2
+        penalty: 0.08
+        text: "curl -X GET 'localhost:9200/app-logs/_search?q=level:error' returns matches; parse hits.total.value from the JSON."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.observability.elk-basics/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

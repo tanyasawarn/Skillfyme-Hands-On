@@ -1,0 +1,116 @@
+id: lab.gitlab.cicd-pipelines
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Author a GitLab CI/CD pipeline YAML
+  summary: Write a .gitlab-ci.yml with staged jobs, matching GitLab's own pipeline model.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [gitlab, ci-cd]
+
+curriculum:
+  primary_topic: topic.devops.gitlab-cicd-pipelines
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: gitlab.cicd-pipelines
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [git.release-management]
+  soft: [jenkins.pipeline-as-code]
+
+objectives:
+  - Author a .gitlab-ci.yml with named stages
+  - Assign jobs to stages so they run in the correct order
+  - Validate the pipeline YAML is well-formed
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.linux.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 2Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.git-repo-empty.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Write a staged .gitlab-ci.yml
+    required: true
+    instructions_md: |
+      In `~/repo`, create `.gitlab-ci.yml` declaring `stages: [build,
+      test, deploy]`, with one job per stage (each with a `stage:` key
+      matching and a `script:` list).
+    validators:
+      - id: v.pipeline-file-exists
+        type: FILE_EXISTS
+        run: "~/repo/.gitlab-ci.yml"
+        expect:
+          exists: true
+        weight: 0.2
+        on_fail: ".gitlab-ci.yml doesn't exist yet."
+      - id: v.pipeline-valid-yaml
+        type: FILE_PARSE
+        run: "~/repo/.gitlab-ci.yml"
+        expect:
+          format: yaml
+        weight: 0.3
+        on_fail: ".gitlab-ci.yml isn't valid YAML."
+      - id: v.pipeline-has-three-stages
+        type: FILE_CONTENT
+        run: "~/repo/.gitlab-ci.yml"
+        expect:
+          contains_all: ["build", "test", "deploy"]
+        weight: 0.5
+        on_fail: "The pipeline should declare all three stages: build, test, deploy."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "GitLab CI/CD's stages: key declares the order; each job's own stage: key assigns it to one."
+      - level: 2
+        penalty: 0.06
+        text: "Top-level: `stages: [build, test, deploy]`. Then one job block per stage with a script: list."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.gitlab.cicd-pipelines/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

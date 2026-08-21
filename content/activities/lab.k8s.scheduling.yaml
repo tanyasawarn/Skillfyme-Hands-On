@@ -1,0 +1,119 @@
+id: lab.k8s.scheduling
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Control Pod placement with node affinity
+  summary: Use node affinity rules to force a Pod onto a specifically labeled node.
+  difficulty_level: L3
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [kubernetes, scheduling, affinity]
+
+curriculum:
+  primary_topic: topic.devops.k8s.scheduling
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: k8s.scheduling
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [k8s.storage]
+  soft: []
+
+objectives:
+  - Label a node with a custom key/value
+  - Author a required node affinity rule referencing that label
+  - Verify the Pod actually scheduled onto the labeled node
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Label a node and schedule with affinity
+    required: true
+    instructions_md: |
+      Label the cluster's node with `disktype=ssd`. Create a Pod
+      `affinity-demo` with a required node affinity rule matching
+      `disktype: ssd`, and verify it schedules successfully.
+    validators:
+      - id: v.node-labeled
+        type: K8S_ASSERT
+        run: "kubectl get nodes -l disktype=ssd -o name"
+        expect:
+          jsonpath: "$"
+          op: "exists"
+        weight: 0.3
+        on_fail: "No node has the label disktype=ssd yet. Run `kubectl label nodes <node> disktype=ssd`."
+      - id: v.pod-manifest-has-affinity
+        type: SHELL_ASSERT
+        run: "kubectl get pod affinity-demo -o yaml | grep -q disktype"
+        expect:
+          exit_code: 0
+        weight: 0.3
+        on_fail: "affinity-demo's spec doesn't reference the disktype key at all."
+      - id: v.pod-running-on-labeled-node
+        type: K8S_ASSERT
+        run: "kubectl get pod affinity-demo -o jsonpath='{.status.phase}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "Running"
+        weight: 0.4
+        on_fail: "affinity-demo isn't Running — check `kubectl describe pod affinity-demo` for scheduling errors."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Label the node first: `kubectl label nodes <node-name> disktype=ssd`."
+      - level: 2
+        penalty: 0.08
+        text: "spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms with a matchExpressions entry for key disktype, operator In, values [ssd]."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.k8s.scheduling/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

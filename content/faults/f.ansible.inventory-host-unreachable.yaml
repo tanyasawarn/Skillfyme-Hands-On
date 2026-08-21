@@ -1,0 +1,25 @@
+id: f.ansible.inventory-host-unreachable
+version: 1
+title: Ansible playbook fails partway because one inventory host is unreachable
+summary: A playbook run against a host group fails on one specific host due to an SSH/connectivity issue, and the failure isn't obviously distinguished from a task logic bug.
+
+targets: [ansible.execution]
+symptom_class: PlaybookPartialFailure
+skills_probed: [ansible.basics]
+
+canonical_diagnostic_path:
+  - "ansible-playbook output → see UNREACHABLE for one specific host"
+  - "ansible <host> -m ping → reproduce the connectivity failure directly"
+  - "check SSH connectivity/credentials/host key for that specific host"
+
+expected_fix_class: [fix_host_connectivity, fix_ssh_credentials, remove_stale_inventory_entry]
+detectability: high
+mean_time_to_diagnose_minutes: 6
+
+params_schema:
+  inventory_host:
+    type: string
+    description: The host to make unreachable.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

@@ -1,0 +1,29 @@
+id: f.load.traffic-spike
+version: 1
+title: Sustained synthetic traffic spike
+summary: An escalation-class fault -- a sudden sustained RPS increase that exposes under-provisioned replicas or missing autoscaling.
+
+targets: [k8s.autoscaling, cloud.progressive-delivery]
+symptom_class: LatencySpike
+skills_probed: [k8s.autoscaling, observability.alerting]
+
+canonical_diagnostic_path:
+  - "check dashboards/alerts → notice p99 latency and error-rate increase"
+  - "kubectl top pods → confirm CPU/memory saturation under load"
+  - "kubectl get hpa → check whether autoscaling is configured and reacting"
+  - "kubectl get deploy → check current replica count vs. what the load requires"
+
+expected_fix_class: [configure_hpa, manually_scale_replicas]
+detectability: high
+mean_time_to_diagnose_minutes: 5
+
+params_schema:
+  rps:
+    type: integer
+    description: Requests per second to generate.
+  duration_s:
+    type: integer
+    description: How long to sustain the spike, in seconds.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER

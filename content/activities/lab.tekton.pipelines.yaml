@@ -1,0 +1,114 @@
+id: lab.tekton.pipelines
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Build a Tekton Task and run it as a TaskRun
+  summary: Author a Tekton Task with steps, then trigger it and confirm it succeeds.
+  difficulty_level: L3
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [tekton, ci-cd, kubernetes]
+
+curriculum:
+  primary_topic: topic.devops.tekton-pipelines
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: tekton.pipelines
+    weight: 1.0
+    primary: true
+    bloom: apply
+
+prerequisites:
+  hard: [istio.mtls-security]
+  soft: []
+
+objectives:
+  - Author a Tekton Task with ordered steps
+  - Trigger it via a TaskRun
+  - Verify the TaskRun completed successfully
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.tekton-installed.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Author and run a Tekton Task
+    required: true
+    instructions_md: |
+      Create a Task named `hello-task` with a single step that echoes
+      "Hello from Tekton". Trigger it via a TaskRun and confirm it
+      succeeds.
+    validators:
+      - id: v.task-exists
+        type: K8S_ASSERT
+        run: "kubectl get task hello-task -o jsonpath='{.metadata.name}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "hello-task"
+        weight: 0.4
+        on_fail: "Task hello-task doesn't exist."
+      - id: v.taskrun-succeeded
+        type: K8S_ASSERT
+        run: "kubectl get taskrun -l tekton.dev/task=hello-task -o jsonpath='{.items[0].status.conditions[0].status}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "True"
+        weight: 0.6
+        on_fail: "No successful TaskRun found for hello-task. Check `kubectl get taskrun` and `tkn taskrun logs`."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "A Task defines reusable steps; a TaskRun is one execution of it — similar to a function definition vs a function call."
+      - level: 2
+        penalty: 0.08
+        text: "spec.steps: [{name: hello, image: alpine, script: 'echo Hello from Tekton'}], then apply a TaskRun referencing taskRef.name: hello-task."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.tekton.pipelines/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

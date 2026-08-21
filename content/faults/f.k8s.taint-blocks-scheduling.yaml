@@ -1,0 +1,33 @@
+id: f.k8s.taint-blocks-scheduling
+version: 1
+title: Node taint added without a matching pod toleration
+summary: A node was tainted (e.g. for maintenance) but a critical Deployment's pods have no matching toleration, leaving them unschedulable.
+
+targets: [k8s.scheduling]
+symptom_class: Unschedulable
+skills_probed: [k8s.scheduling, k8s.troubleshooting]
+
+canonical_diagnostic_path:
+  - "kubectl get pods → notice pods stuck Pending"
+  - "kubectl describe pod → see '0/N nodes are available: 1 node(s) had taint'"
+  - "kubectl describe node → inspect Taints"
+  - "kubectl get deploy -o yaml → check spec.template.spec.tolerations"
+
+expected_fix_class: [add_toleration, remove_taint]
+detectability: medium
+mean_time_to_diagnose_minutes: 7
+
+params_schema:
+  node:
+    type: string
+    description: Name of the node to taint.
+  taint_key:
+    type: string
+    description: The taint key to apply, e.g. "maintenance".
+  taint_effect:
+    type: string
+    description: NoSchedule, PreferNoSchedule, or NoExecute.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER
+handler_implemented: true

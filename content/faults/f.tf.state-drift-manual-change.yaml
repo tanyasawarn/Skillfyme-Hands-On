@@ -1,0 +1,28 @@
+id: f.tf.state-drift-manual-change
+version: 1
+title: Resource was manually modified outside Terraform, causing drift
+summary: Someone changed a resource by hand (e.g. via a console/CLI), so Terraform's state no longer matches real infrastructure and plan shows unexpected diffs.
+
+targets: [terraform.state]
+symptom_class: UnexpectedPlanDiff
+skills_probed: [terraform.state-management, terraform.basics]
+
+canonical_diagnostic_path:
+  - "terraform plan → unexpected changes shown for a resource nobody edited in code"
+  - "terraform state show <resource> → compare recorded state vs. actual live value"
+  - "check external change history (e.g. cloud audit log) for the real cause"
+
+expected_fix_class: [terraform_refresh_and_reconcile, revert_manual_change]
+detectability: medium
+mean_time_to_diagnose_minutes: 10
+
+params_schema:
+  resource_address:
+    type: string
+    description: The Terraform resource address that will drift.
+  drifted_field:
+    type: string
+    description: The field whose live value should diverge from state.
+
+reversible: true
+min_tier: T1_SHARED_CONTAINER
