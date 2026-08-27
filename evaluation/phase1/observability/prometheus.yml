@@ -1,0 +1,26 @@
+# Minimal Prometheus config for measuring the Phase 1 exit criteria
+# against a local / staging bring-up. Adjust the target hosts to match
+# your deployment; the ports are the code defaults:
+#   orchestrator  ORCHESTRATOR_METRICS_PORT   default 9090
+#   practice-core PORT (same server as the API) default 3001, path /metrics
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []   # point at your Alertmanager
+
+scrape_configs:
+  - job_name: orchestrator
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: practice-core
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["localhost:3001"]

@@ -1,9 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 import Ajv2020 from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
+import { resolveRepoRelativePath } from '../../common/repo-relative-path';
 
 export interface LintIssue {
   path: string;
@@ -102,15 +102,12 @@ export class SpecLintService {
   }
 
   private resolveContractsPath(file: string): string {
-    // practice-core/src/modules/content-ci -> repo root is 4 levels up.
-    // Resolved from process.cwd() as a fallback for ts-node/dist layouts
-    // where __dirname depth can vary; both paths are tried.
-    const fromDirname = path.resolve(__dirname, '../../../../contracts', file);
-    if (fs.existsSync(fromDirname)) return fromDirname;
-    const fromCwd = path.resolve(process.cwd(), '../contracts', file);
-    if (fs.existsSync(fromCwd)) return fromCwd;
-    throw new Error(
-      `contracts/${file} not found from ${fromDirname} or ${fromCwd} -- is CONTRACTS_DIR misconfigured?`,
-    );
+    // PLAN.md Phase 4's U4: this file's own prior comment here claimed
+    // "repo root is 4 levels up" -- confirmed wrong via a direct
+    // path.resolve() check against the real dist/ layout
+    // (practice-core/src/modules/content-ci is 5 levels from repo root
+    // once compiled to dist/src/modules/content-ci, not 4). Silently
+    // masked in practice by always falling through to the cwd fallback.
+    return resolveRepoRelativePath(__dirname, 5, `contracts/${file}`);
   }
 }

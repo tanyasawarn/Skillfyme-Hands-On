@@ -102,6 +102,76 @@
       "items": { "type": "string", "enum": ["terminal", "editor", "k8s_dashboard_readonly", "preview"] }
     },
 
+    "health_gate": {
+      "description": "Doc §3.2/§7.3 worked example: checks that MUST pass before any fault in `faults` is applied. Phase 1's actual gate is still just 'pod reached Ready' (orchestrator's WaitForPodReady, doc §5.5 step 4) -- this field lets content declare a richer PRODUCTION_SIM-specific gate for a later health-gate implementation to read, without blocking fault-injection wiring on that richer gate existing yet.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type"],
+        "properties": {
+          "type": { "type": "string", "enum": ["HTTP_PROBE", "K8S_ASSERT"] },
+          "url": { "type": "string" },
+          "expect_status": { "type": "integer" },
+          "retries": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+
+    "faults": {
+      "description": "Doc §3.2/§7.3 worked example, PLAN.md Phase 2 integration point: PRODUCTION_SIM's fault manifest, applied after the health gate passes. apply_at 'T0' means immediately after health gate; 'T+<seconds>' means that many seconds after T0, for escalation sequences -- the T+ scheduling itself is a later increment (see AttemptService.provision()'s doc comment), T0 is what Phase 2's initial wiring actually executes.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "apply_at"],
+        "properties": {
+          "id": { "type": "string" },
+          "params": { "type": "object" },
+          "apply_at": { "type": "string", "pattern": "^(T0|T\\+[0-9]+)$" }
+        }
+      }
+    },
+
+    "process_signals": {
+      "description": "Doc §3.3 worked example. blast_radius.forbidden is a list of command substrings the Session Broker's telemetry tap checks every COMMAND_EXECUTED against (orchestrator/internal/sessionbroker/telemetry_tap.go) -- 'a learner who fixes the 502 by deleting the namespace... should not score well.' diagnostic_efficiency's good/bad action lists are the raw material for the diagnostic_efficiency criterion (fn.diagnostic_efficiency.v1) -- both are PRODUCTION_SIM-only signals, absent on GUIDED_LAB activities.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "diagnostic_efficiency": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "good_actions": { "type": "array", "items": { "type": "string" } },
+            "bad_actions": { "type": "array", "items": { "type": "string" } },
+            "scoring": { "type": "string", "enum": ["ratio_and_ordering"] }
+          }
+        },
+        "blast_radius": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "forbidden": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+
+    "artifacts_required": {
+      "description": "Doc §3.3 worked example / §6.5: written artifacts the learner must submit (e.g. an incident note), graded against a rubric. ArtifactService.gradeArtifact reads rubric by id from content/rubrics/<rubric>.yaml (RubricRepository -- no rubric/rubric_version table exists, same content-as-code pattern as content/faults).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "type"],
+        "properties": {
+          "key": { "type": "string" },
+          "type": { "type": "string", "enum": ["MARKDOWN"] },
+          "rubric": { "type": "string" }
+        }
+      }
+    },
+
     "tasks": {
       "type": "array",
       "minItems": 1,

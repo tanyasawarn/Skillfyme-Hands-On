@@ -1,0 +1,35 @@
+# Smoke-test override for the `app` profile.
+#
+# Shifts every host port so the compose stack can run alongside a
+# developer's locally-running orchestrator / practice-core / web
+# processes without a bind conflict. The *container* ports and the
+# compose-internal service DNS names are unchanged, so nothing inside
+# the stack cares about this file -- it only remaps what the host sees.
+#
+#   docker compose --profile app \
+#     -f docker-compose.yml \
+#     -f evaluation/phase1/smoke/docker-compose.smoke.yml up -d
+# !override replaces the base file's port list entirely (compose merges
+# sequences by appending otherwise, which would re-add the conflicting
+# base ports).
+services:
+  orchestrator:
+    ports: !override
+      - "50151:50051"
+      - "8181:8081"
+      - "9190:9090"
+
+  practice-core:
+    environment:
+      # Allow the shifted web origin through CORS.
+      CORS_ORIGIN: http://localhost:3100
+    ports: !override
+      - "3101:3001"
+
+  web:
+    build:
+      args:
+        # The browser must reach practice-core on the shifted host port.
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:3101
+    ports: !override
+      - "3100:3000"

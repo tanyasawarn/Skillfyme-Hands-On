@@ -1,8 +1,10 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { Kysely } from 'kysely';
 import { KYSELY } from '../../db/database.module';
 import type { Database } from '../../db/schema';
+import { appendTypedEvent } from '../event-store/attempt-event-type';
 import { EventStoreRepository } from '../event-store/event-store.repository';
+import { MetricsService } from '../metrics/metrics.service';
 import {
   VALIDATOR_EXECUTOR,
   type ValidatorExecutor,
@@ -57,6 +59,7 @@ export class ValidatorRunnerService {
     @Inject(KYSELY) private readonly db: Kysely<Database>,
     private readonly events: EventStoreRepository,
     @Inject(VALIDATOR_EXECUTOR) private readonly executor: ValidatorExecutor,
+    @Optional() private readonly metrics?: MetricsService,
   ) {}
 
   async run(input: RunValidationInput): Promise<TaskValidationSummary[]> {
@@ -77,7 +80,7 @@ export class ValidatorRunnerService {
       .returningAll()
       .executeTakeFirstOrThrow();
 
-    await this.events.append({
+    await appendTypedEvent(this.events, {
       attemptId: input.attemptId,
       actor: 'SYSTEM',
       type: 'VALIDATION_REQUESTED',
@@ -93,11 +96,24 @@ export class ValidatorRunnerService {
       // count -- revisit if a real activity's task count makes this slow).
       const results = await Promise.all(
         task.validators.map((v) =>
-          this.executeWithTimeoutAndRetry(input.environmentId, v),
+          this.executeWithTimeoutAndRetry(
+            input.environmentId,
+            input.attemptId,
+            v,
+          ),
         ),
       );
 
+      // doc §6.2 / §13.1 exit criterion: validator ERROR rate < 0.5%.
+      // Keyed by declared validator type so a single misbehaving type is
+      // visible, not just the aggregate.
+      const typeById = new Map(task.validators.map((v) => [v.id, v.type]));
+
       for (const result of results) {
+        this.metrics?.recordValidatorResult(
+          typeById.get(result.validatorId) ?? 'unknown',
+          result.status,
+        );
         await this.db
           .insertInto('attempt.validator_result')
           .values({
@@ -114,7 +130,7 @@ export class ValidatorRunnerService {
         // Doc §6.2: "ERROR is never scored against the learner... excluded
         // from scoring." VALIDATOR_RESULT event still records it for
         // on-call visibility, but it does not drive TASK_PASSED/FAILED.
-        await this.events.append({
+        await appendTypedEvent(this.events, {
           attemptId: input.attemptId,
           actor: 'VALIDATOR',
           type: 'VALIDATOR_RESULT',
@@ -143,7 +159,7 @@ export class ValidatorRunnerService {
         blockingResults.length > 0 &&
         blockingResults.every((r) => r.status === 'PASS');
 
-      await this.events.append({
+      await appendTypedEvent(this.events, {
         attemptId: input.attemptId,
         actor: 'SYSTEM',
         type: taskPassed ? 'TASK_PASSED' : 'TASK_FAILED',
@@ -181,6 +197,7 @@ export class ValidatorRunnerService {
    */
   private async executeWithTimeoutAndRetry(
     environmentId: string,
+    attemptId: string,
     spec: ValidatorSpec,
   ) {
     const timeoutMs = spec.timeoutMs ?? 5000;
@@ -189,7 +206,7 @@ export class ValidatorRunnerService {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const result = await withTimeout(
-          this.executor.execute(environmentId, spec),
+          this.executor.execute(environmentId, attemptId, spec),
           timeoutMs,
         );
         if (result.status !== 'ERROR' || attempt === maxAttempts) return result;

@@ -1,0 +1,142 @@
+# Prometheus alerting rules for the Phase 1 MVP exit criteria (doc §13.1,
+# PHASE1_MVP_COMPLETION.md §7). Load into Prometheus via
+# `rule_files: [ alerts.yml ]` and point Alertmanager at your channel of
+# choice.
+#
+# Metric names come from:
+#   orchestrator/internal/metrics/metrics.go   (orchestrator_*)
+#   practice-core/src/modules/metrics/         (practice_core_*)
+#
+# Every threshold here is the doc's number, not a guess:
+#   provision success ≥ 99%      -> ProvisionSuccessLow
+#   time-to-ready p95 ≤ 20s       -> TimeToReadyP95High
+#   validator ERROR rate < 0.5%   -> ValidatorErrorRateHigh
+#   cost/attempt < $0.08          -> CostPerAttemptHigh
+#   zero orphan environments      -> OrphanEnvironmentsDetected
+groups:
+  - name: phase1-exit-criteria
+    rules:
+      - alert: TimeToReadyP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(orchestrator_provision_duration_seconds_bucket[10m])) by (le)
+          ) > 20
+        for: 10m
+        labels:
+          severity: page
+          exit_criterion: time_to_ready_p95
+        annotations:
+          summary: "Provision time-to-ready p95 above the 20s SLO"
+          description: >
+            p95 time-to-ready has been {{ $value | printf "%.1f" }}s
+            (> 20s) for 10 minutes. Phase 1 exit criterion is p95 ≤ 20s.
+
+      - alert: ProvisionSuccessLow
+        expr: |
+          (
+            sum(rate(orchestrator_provision_total{result="success"}[15m]))
+            /
+            sum(rate(orchestrator_provision_total[15m]))
+          ) < 0.99
+        for: 15m
+        labels:
+          severity: page
+          exit_criterion: provision_success_rate
+        annotations:
+          summary: "Provision success rate below 99%"
+          description: >
+            Provision success rate is
+            {{ $value | humanizePercentage }} over the last 15m
+            (exit criterion: ≥ 99%).
+
+      - alert: ValidatorErrorRateHigh
+        expr: |
+          (
+            sum(rate(practice_core_validator_result_total{status="ERROR"}[15m]))
+            /
+            sum(rate(practice_core_validator_result_total[15m]))
+          ) > 0.005
+        for: 15m
+        labels:
+          severity: page
+          exit_criterion: validator_error_rate
+        annotations:
+          summary: "Validator ERROR rate above 0.5%"
+          description: >
+            Validator ERROR rate is {{ $value | humanizePercentage }}
+            over 15m (exit criterion: < 0.5%). ERROR = the validator
+            itself broke, never scored against the learner.
+
+      - alert: CostPerAttemptHigh
+        expr: |
+          histogram_quantile(
+            0.90,
+            sum(rate(orchestrator_attempt_cost_usd_bucket[1h])) by (le)
+          ) > 0.08
+        for: 30m
+        labels:
+          severity: warn
+          exit_criterion: cost_per_attempt
+        annotations:
+          summary: "Cost per attempt (p90) above $0.08"
+          description: >
+            p90 metered cost per attempt is
+            ${{ $value | printf "%.3f" }} over the last hour
+            (exit criterion: < $0.08).
+
+      - alert: OrphanEnvironmentsDetected
+        expr: increase(orchestrator_reaper_orphans_found_total[1h]) > 0
+        for: 1m
+        labels:
+          severity: page
+          exit_criterion: zero_orphans
+        annotations:
+          summary: "Reaper found orphan environments in the last hour"
+          description: >
+            {{ $value | printf "%.0f" }} orphan namespace(s) with no
+            reaper record were found in the last hour. Phase 1's
+            zero-orphan gate requires this to stay at 0.
+
+  - name: phase1-operational
+    rules:
+      - alert: BudgetHardStopFiring
+        expr: increase(orchestrator_budget_action_total{tier="hard_stop_120"}[15m]) > 0
+        for: 1m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Budget 120% hard-stop force-destroyed an environment"
+          description: >
+            The cost meter force-destroyed
+            {{ $value | printf "%.0f" }} environment(s) at the 120%
+            budget threshold in the last 15m. Expected to be rare;
+            a sustained rate means budgets are mis-sized or something
+            is not tearing down.
+
+      - alert: WarmPoolChronicMiss
+        expr: |
+          (
+            sum(rate(orchestrator_warm_pool_claim_total{result="miss"}[15m]))
+            /
+            clamp_min(sum(rate(orchestrator_warm_pool_claim_total[15m])), 0.001)
+          ) > 0.5
+        for: 20m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Warm-pool miss rate above 50%"
+          description: >
+            Over half of provisions are missing the warm pool and
+            cold-provisioning. This directly pushes time-to-ready p95
+            up. Check the filler is running and targets are sized for
+            current demand.
+
+      - alert: OrchestratorMetricsEndpointDown
+        expr: up{job="orchestrator"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Orchestrator /metrics endpoint is not scrapable"
+          description: "Prometheus cannot scrape the orchestrator; all exit-criteria measurement is blind."

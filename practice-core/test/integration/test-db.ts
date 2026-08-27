@@ -7,14 +7,46 @@ import type { Database } from '../../src/db/schema';
  * docker-compose instance. Default port is 5433, not 5432 -- see
  * memory/docker-compose.yml comment: host 5432 is commonly taken by a
  * native Postgres install, so this project's compose file remaps to 5433.
+ *
+ * Defaults to practice_engine_test, a dedicated database (see
+ * db/migrations/README or scripts/create-test-db.sh), NOT the shared
+ * practice_engine database every other service and every developer's
+ * browser session points at. This used to default to practice_engine
+ * itself -- truncateAll() below wiped the shared demo tenant, skill
+ * graph, and full activity catalog (twice, confirmed live) simply from
+ * running this suite normally, since nothing distinguished "the test
+ * database" from "the database." TEST_DATABASE_URL lets CI or a
+ * developer point this elsewhere explicitly; DATABASE_URL is
+ * deliberately NOT read here anymore, precisely because that's the same
+ * env var practice-core's own app reads for the real database, and an
+ * inherited/copy-pasted shell env is exactly how this kept happening.
  */
+const DEFAULT_TEST_DATABASE_URL =
+  'postgres://practice:practice@localhost:5433/practice_engine_test';
+
 export function createTestDb(): Kysely<Database> {
-  const pool = new Pool({
-    connectionString:
-      process.env.DATABASE_URL ??
-      'postgres://practice:practice@localhost:5433/practice_engine',
-  });
+  const connectionString =
+    process.env.TEST_DATABASE_URL ?? DEFAULT_TEST_DATABASE_URL;
+  assertNotSharedDatabase(connectionString);
+  const pool = new Pool({ connectionString });
   return new Kysely<Database>({ dialect: new PostgresDialect({ pool }) });
+}
+
+/**
+ * Last-resort guard: even if TEST_DATABASE_URL is misconfigured to point
+ * at the real database (a copy-pasted DATABASE_URL, a shared shell env),
+ * refuse outright rather than silently truncating it. The two incidents
+ * this fixes both happened via exactly that kind of inherited env value,
+ * not a deliberate override -- a loud failure here is strictly better
+ * than a quiet one discovered by the whole platform's catalog vanishing.
+ */
+function assertNotSharedDatabase(connectionString: string): void {
+  if (/\/practice_engine(\?|$)/.test(connectionString)) {
+    throw new Error(
+      `Refusing to run integration tests against practice_engine (the shared, non-test database): ${connectionString}\n` +
+        `Set TEST_DATABASE_URL to a dedicated test database instead (default: ${DEFAULT_TEST_DATABASE_URL}).`,
+    );
+  }
 }
 
 /**

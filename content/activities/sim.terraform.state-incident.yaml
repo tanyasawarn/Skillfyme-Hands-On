@@ -1,0 +1,205 @@
+id: sim.terraform.state-incident
+version: 1
+mode: PRODUCTION_SIM
+status: DRAFT
+
+meta:
+  title: "INC-5506: Terraform state is locked, drifted, and version-mismatched"
+  summary: >
+    A crashed CI job left a genuinely orphaned state lock, someone
+    hand-edited a managed file outside Terraform, and two workspaces
+    silently resolved different versions of the same shared module --
+    diagnose all three before the next planned apply.
+  difficulty_level: L3
+  estimated_minutes: 40
+  locale: en
+  authors: [content-team]
+  tags: [terraform, incident-response, troubleshooting, iac]
+
+curriculum:
+  primary_topic: topic.devops.terraform-state-management
+  also_relevant: [topic.devops.terraform-modules-workspaces]
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: terraform.state-management
+    weight: 0.4
+    primary: true
+    bloom: analyze
+  - skill: terraform.modules-workspaces
+    weight: 0.3
+    primary: false
+    bloom: analyze
+  - skill: sre.postmortem-authorship
+    weight: 0.3
+    primary: false
+    bloom: create
+
+prerequisites:
+  hard: [terraform.basics]
+  soft: [terraform.state-management, terraform.modules-workspaces]
+
+objectives:
+  - Diagnose and resolve a genuinely orphaned Terraform state lock
+  - Diagnose and reconcile drift between real state and a hand-edited file
+  - Diagnose why two workspaces resolved different versions of the same module
+  - Write a root-cause/timeline/remediation/prevention incident note
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "2"
+    memory: 3Gi
+    disk: 6Gi
+  ttl_minutes: 50
+  idle_timeout_minutes: 15
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.terraform-workspace.v1
+  cost_budget_usd: 0.35
+
+surfaces: [terminal, editor, k8s_dashboard_readonly]
+
+health_gate:
+  - type: HTTP_PROBE
+    url: "http://practice-terraform-minio:9000/minio/health/live"
+    expect_status: 200
+    retries: 30
+
+faults:
+  - id: f.tf.state-lock-orphan
+    params: { workspace: lock, lock_id: "" }
+    apply_at: T0
+  - id: f.tf.state-drift-manual-change
+    params: { resource_address: local_file.tracked, drifted_field: content }
+    apply_at: T0
+  - id: f.tf.module-version-pin-mismatch
+    params: { module_source: "hashicorp/dir/template", version_a: "1.0.0", version_b: "1.0.2" }
+    apply_at: T0
+
+process_signals:
+  diagnostic_efficiency:
+    good_actions:
+      - "terraform plan"
+      - "terraform show"
+      - "terraform state list"
+      - "terraform force-unlock"
+      - "terraform init -upgrade"
+    bad_actions:
+      - "rm -rf .terraform"
+      - "terraform state rm"
+    scoring: ratio_and_ordering
+  blast_radius:
+    forbidden:
+      - "terraform destroy"
+      - "kubectl delete ns"
+
+tasks:
+  - key: t1
+    title: "INC-5506 (P3): the lock workspace's state is stuck locked"
+    required: true
+    instructions_md: |
+      Every `terraform plan`/`apply` against the `lock` workspace fails
+      immediately with a state-lock error. No one on the team currently
+      has a running Terraform process against it.
+
+      **Access:** exec access into the Terraform runner pod
+      (`/work/lock`).
+
+      Diagnose and resolve the lock so plans succeed again.
+    validators:
+      - id: v.lock-workspace-plans-cleanly
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-terraform-runner -- sh -c 'cd /work/lock && terraform plan -no-color -lock-timeout=5s'"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "Confirm no real process is genuinely still running before force-unlocking -- the error message includes the real Lock ID to use."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "`terraform force-unlock <lock-id>` only after confirming the holder is genuinely gone, not still running."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: "The drift workspace's tracked file was hand-edited"
+    required: true
+    instructions_md: |
+      `terraform plan` against the `drift` workspace shows an
+      unexpected diff on `local_file.tracked` -- nobody changed the
+      Terraform code.
+
+      Diagnose and reconcile the drift.
+    validators:
+      - id: v.drift-workspace-clean-plan
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-terraform-runner -- sh -c 'cd /work/drift && terraform plan -no-color -detailed-exitcode; test $? -ne 2'"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "Check terraform plan's diff for local_file.tracked's content vs. what's actually on disk -- someone edited the real file directly."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "A plan diff on a resource nobody's code touched means the REAL underlying resource was changed by hand -- reconcile by either re-applying to overwrite it, or importing the manual change into code."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t3
+    title: "Two workspaces resolved different module versions"
+    required: true
+    instructions_md: |
+      `module-a` and `module-b` both call the same shared module
+      (`hashicorp/dir/template`) but their outputs behave differently
+      for identical input -- one workspace pins a different version
+      than the other.
+
+      Diagnose and align the version constraints.
+    validators:
+      - id: v.module-versions-aligned
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-terraform-runner -- sh -c 'diff <(cd /work/module-a && terraform output -raw svg_content_type) <(cd /work/module-b && terraform output -raw svg_content_type)'"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "Compare each workspace's version = \"...\" constraint for the hashicorp/dir/template module call -- they don't match."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "`terraform init -upgrade` in each workspace shows exactly which module version each one actually resolved."
+    solution_apply: scripts/t3_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+artifacts_required:
+  - key: incident-note
+    type: MARKDOWN
+    rubric: rub.incident-note.v2
+
+scoring:
+  profile: sp.production-sim.default
+
+ai_mentor:
+  persona: senior_engineer
+  max_hints: 4
+  token_budget: 10000
+  solution_visibility: HIDDEN
+  policy: policy.sim.socratic.v1
+
+reference_solution:
+  repo_path: solutions/sim.terraform.state-incident/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

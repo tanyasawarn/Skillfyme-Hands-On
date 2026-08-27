@@ -23,3 +23,4 @@ params_schema:
 
 reversible: true
 min_tier: T1_SHARED_CONTAINER
+handler_implemented: true

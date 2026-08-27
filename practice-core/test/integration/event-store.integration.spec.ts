@@ -110,6 +110,14 @@ describe('EventStoreRepository (integration, real Postgres)', () => {
     expect(replayed[1].payload).toEqual({ baz: 42 });
   });
 
+  // PLAN.md Phase 3's K8: EventStoreRepository itself stays a generic,
+  // untyped-string event log (see event-store.repository.ts's own doc
+  // comment for why) -- these ordering/concurrency tests exercise that
+  // generic layer directly with arbitrary type strings ('A'/'B'/'C'/
+  // `EVT_${n}`), unrelated to any real business event. Real callers get
+  // compile-time taxonomy checking via TypedAppendEventInput /
+  // appendTypedEvent() instead (attempt-event-type.ts), not by
+  // constraining this repository's own generic `type: string`.
   it('listSince returns only events after the given seq', async () => {
     await events.append({ attemptId, actor: 'SYSTEM', type: 'A', payload: {} });
     const second = await events.append({

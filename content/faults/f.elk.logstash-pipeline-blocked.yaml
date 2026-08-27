@@ -1,17 +1,34 @@
 id: f.elk.logstash-pipeline-blocked
-version: 1
-title: Logstash pipeline is blocked by a downstream Elasticsearch mapping conflict
-summary: A field's type changed in incoming logs, causing an Elasticsearch mapping conflict that backs up the entire Logstash pipeline -- not just drops the bad documents.
+version: 2
+title: Elasticsearch mapping conflict silently drops a whole class of log documents
+summary: A field's type changed in incoming logs, causing an Elasticsearch mapping conflict -- documents with the conflicting field are silently rejected and permanently lost, while unrelated logs keep flowing normally, so nothing in the dashboards looks obviously broken.
 
+# v2 diagnostic path corrected against the real execution mechanism
+# (orchestrator/internal/faultinjection -- ELK batch -- and
+# internal/fixture/handlers_elk.go): live-tested against real Logstash
+# 8.15 + Elasticsearch 8.15, a mapping conflict on a single field produces
+# a per-document document_parsing_exception (HTTP 400) that Logstash logs
+# and DROPS, then continues processing every subsequent event normally --
+# it does NOT back up or halt the pipeline as v1 claimed. That framing
+# described a failure mode this real, stock ELK setup does not reproduce
+# (an unbounded pipeline stall from one bad document, which would require
+# a from-scratch retry/backpressure configuration this fault's own
+# handler can't safely engineer around a shared multi-tenant cluster).
+# v2 teaches the failure mode this platform's own live-verified ELK
+# fixture actually produces: a sustained, silent loss of every document
+# containing the conflicting field, while everything else keeps working
+# -- itself a real, common, and often HARDER-to-notice production
+# incident than an obvious full outage would be (matching this fault's
+# own detectability: medium framing, arguably better than v1's).
 targets: [elk.logstash]
-symptom_class: LogIngestionStalled
+symptom_class: PartialLogIngestionLoss
 skills_probed: [observability.elk-basics]
 
 canonical_diagnostic_path:
-  - "check dashboards → notice logs stopped arriving entirely, not just for one source"
-  - "check Logstash pipeline stats API → confirm events queued but not flushing"
-  - "check Logstash logs → see Elasticsearch 'mapper_parsing_exception'"
-  - "check the conflicting field's mapping in the target index"
+  - "check dashboards → notice one category of events (matching the conflicting field) never appears, while other logs flow normally"
+  - "check the Elasticsearch index's document count → confirm it's growing slower than the actual log volume being sent"
+  - "check Logstash logs → see repeated Elasticsearch 'document_parsing_exception' / 'mapper_parsing_exception' entries for the same field"
+  - "check the conflicting field's mapping in the target index → compare against the type incoming documents are actually sending"
 
 expected_fix_class: [fix_field_type_conflict, roll_new_index_with_correct_mapping]
 detectability: medium
@@ -27,3 +44,4 @@ params_schema:
 
 reversible: true
 min_tier: T1_SHARED_CONTAINER
+handler_implemented: true

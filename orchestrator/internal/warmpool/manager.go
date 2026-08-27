@@ -13,8 +13,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/envstatus"
 	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/k8s"
+	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/loop"
+	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/metrics"
 	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/reaper"
+	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/ttl"
 )
 
 func newEnvID() string {
@@ -50,12 +54,15 @@ func poolKey(blueprintID string) string {
 func (m *Manager) Claim(ctx context.Context, blueprintID string) (envID string, claimed bool) {
 	val, err := m.rdb.SPop(ctx, poolKey(blueprintID)).Result()
 	if err == redis.Nil {
+		metrics.WarmPoolClaimTotal.WithLabelValues("miss").Inc()
 		return "", false
 	}
 	if err != nil {
 		log.Printf("[warmpool] claim error (falling through to cold-provision): %v", err)
+		metrics.WarmPoolClaimTotal.WithLabelValues("miss").Inc()
 		return "", false
 	}
+	metrics.WarmPoolClaimTotal.WithLabelValues("hit").Inc()
 	return val, true
 }
 
@@ -88,11 +95,13 @@ const UnclaimedAttemptID = "00000000-0000-0000-0000-000000000000"
 
 // warmPoolTTL bounds how long an unclaimed warm environment lives before
 // the reaper recycles it. Doc §5.5: "Warm environments have their own
-// shorter TTL (30 min) and are recycled" -- shorter than defaultTTL
-// (90min) since an unclaimed warm environment is pure standing cost with
-// no learner attached, so it should turn over faster than a real attempt
+// shorter TTL (30 min) and are recycled" -- intentionally shorter than
+// ttl.EnvironmentDefault (90min, now a compile-time-linked reference via
+// internal/ttl rather than a value only related by a prose comment)
+// since an unclaimed warm environment is pure standing cost with no
+// learner attached, so it should turn over faster than a real attempt
 // would.
-const warmPoolTTL = 30 * time.Minute
+const warmPoolTTL = ttl.WarmPool
 
 // Target is one blueprint's desired warm-pool depth. Doc §5.5's fuller
 // "predicted_demand" sizing (time-of-day/historical curves) is not
@@ -118,34 +127,38 @@ type Filler struct {
 	db          *pgxpool.Pool
 	targets     []Target
 	interval    time.Duration
+
+	// fillOneFn is the single "provision one warm env and add it to the
+	// pool" step. It's a field, defaulting to (*Filler).fillOne, so
+	// fillOnce's deficit/back-off orchestration -- how many to fill, and
+	// the "stop hammering a failing blueprint this tick" rule -- is
+	// unit-testable against a miniredis-backed Manager without a real
+	// k8s.Provisioner. Production code never sets it.
+	fillOneFn func(ctx context.Context, target Target) error
 }
 
 // NewFiller builds a Filler. interval controls how often the loop checks
 // pool depth and tops up -- doesn't need to be fast, since every claim
 // miss safely falls through to cold-provisioning regardless.
 func NewFiller(pool *Manager, provisioner *k8s.Provisioner, rp *reaper.Reaper, db *pgxpool.Pool, targets []Target, interval time.Duration) *Filler {
-	return &Filler{pool: pool, provisioner: provisioner, reaper: rp, db: db, targets: targets, interval: interval}
+	f := &Filler{pool: pool, provisioner: provisioner, reaper: rp, db: db, targets: targets, interval: interval}
+	f.fillOneFn = f.fillOne
+	return f
 }
 
 // Run blocks, filling the pool on a ticker until ctx is cancelled. Meant
 // to be started as `go filler.Run(ctx)` from main, the same pattern
 // idledetect.Detector.Run and reaper's sweep loop already use.
+// runImmediately=true, unlike those two: a Claim() call must find a
+// pre-provisioned environment ready, so the pool cannot sit empty for a
+// full interval after startup before its first fill (see internal/loop's
+// own doc comment for the full reasoning behind this being the one
+// caller that needs the opposite of reaper/idledetect/costmeter).
 func (f *Filler) Run(ctx context.Context) {
 	if len(f.targets) == 0 {
 		return
 	}
-	ticker := time.NewTicker(f.interval)
-	defer ticker.Stop()
-
-	f.fillOnce(ctx) // don't wait a full interval before the first fill on startup
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			f.fillOnce(ctx)
-		}
-	}
+	loop.RunTicker(ctx.Done(), f.interval, func() { f.fillOnce(ctx) }, true)
 }
 
 func (f *Filler) fillOnce(ctx context.Context) {
@@ -155,13 +168,14 @@ func (f *Filler) fillOnce(ctx context.Context) {
 			log.Printf("[warmpool] filler: checking pool size for blueprint=%s: %v", target.BlueprintID, err)
 			continue
 		}
+		metrics.WarmPoolDepth.WithLabelValues(target.BlueprintID).Set(float64(current))
 		deficit := int64(target.Count) - current
 		if deficit <= 0 {
 			continue
 		}
 		log.Printf("[warmpool] filler: blueprint=%s pool depth=%d target=%d, filling %d", target.BlueprintID, current, target.Count, deficit)
 		for i := int64(0); i < deficit; i++ {
-			if err := f.fillOne(ctx, target); err != nil {
+			if err := f.fillOneFn(ctx, target); err != nil {
 				log.Printf("[warmpool] filler: failed to provision warm env for blueprint=%s: %v", target.BlueprintID, err)
 				break // don't hammer a failing blueprint the rest of this tick; retry next tick
 			}
@@ -186,9 +200,9 @@ func (f *Filler) fillOne(ctx context.Context, target Target) error {
 	// ordering Server.Provision's cold-provision path documents.
 	if _, err := f.db.Exec(ctx, `
 		INSERT INTO env.environment (id, attempt_id, tier, blueprint_id, status, namespace, ready_at)
-		VALUES ($1, $2, 'TIER_T1_SHARED_CONTAINER', $3, 'READY', $4, now())
-		ON CONFLICT (id) DO UPDATE SET status = 'READY', ready_at = now()
-	`, envID, UnclaimedAttemptID, target.BlueprintID, "env-"+envID); err != nil {
+		VALUES ($1, $2, 'TIER_T1_SHARED_CONTAINER', $3, $5, $4, now())
+		ON CONFLICT (id) DO UPDATE SET status = $5, ready_at = now()
+	`, envID, UnclaimedAttemptID, target.BlueprintID, "env-"+envID, envstatus.Ready); err != nil {
 		return err
 	}
 

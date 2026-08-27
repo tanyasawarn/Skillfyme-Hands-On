@@ -1,0 +1,261 @@
+id: sim.k8s.platform-migration-incident
+version: 1
+mode: PRODUCTION_SIM
+status: DRAFT
+
+meta:
+  title: "INC-5102: billing-service can't reach its dependencies after a platform migration"
+  summary: >
+    A platform-team migration to zero-trust networking and tightened
+    resource governance left billing-service unable to start, unable to
+    reach a dependency, and unable to scale -- diagnose all four
+    independent causes and write the incident note.
+  difficulty_level: L4
+  estimated_minutes: 50
+  locale: en
+  authors: [content-team]
+  tags: [k8s, incident-response, troubleshooting, platform-migration]
+
+curriculum:
+  primary_topic: topic.devops.cloud-zero-trust-security
+  also_relevant: [topic.sre.incident-diagnosis]
+  courses: [course.sre]
+
+skills:
+  - skill: k8s.troubleshooting
+    weight: 0.4
+    primary: true
+    bloom: analyze
+  - skill: k8s.resource-management
+    weight: 0.2
+    primary: false
+    bloom: analyze
+  - skill: cloud.zero-trust-security
+    weight: 0.2
+    primary: false
+    bloom: analyze
+  - skill: sre.postmortem-authorship
+    weight: 0.2
+    primary: false
+    bloom: create
+
+prerequisites:
+  hard: [k8s.troubleshooting]
+  soft: [k8s.resource-management, cloud.zero-trust-security]
+
+objectives:
+  - Diagnose why billing-service's pods won't start (a renamed ConfigMap key)
+  - Diagnose why a required volume claim is stuck Pending (a storage class that doesn't exist)
+  - Diagnose why billing-service can't reach payment-service (a NetworkPolicy allow-list gap)
+  - Diagnose why scaling billing-service silently has no effect (a ResourceQuota that's too tight)
+  - Write a root-cause/timeline/remediation/prevention incident note covering all four causes
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "2"
+    memory: 3Gi
+    disk: 5Gi
+  ttl_minutes: 60
+  idle_timeout_minutes: 15
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.billing-platform.v1
+  cost_budget_usd: 0.35
+
+surfaces: [terminal, editor, k8s_dashboard_readonly]
+
+health_gate:
+  - type: HTTP_PROBE
+    url: "http://payment-service/healthz"
+    expect_status: 200
+    retries: 30
+
+# All four faults are real, wired handlers (orchestrator/internal/
+# faultinjection/handlers.go, handlers_batch2.go), each backed by
+# fx.billing-platform.v1's own real baseline objects (this session's
+# Phase 2 completion pass) -- not aspirational content. Applied at T0
+# together (unlike the checkout-latency-incident's staggered timing):
+# this scenario models four INDEPENDENT root causes discovered
+# simultaneously during one migration window, not a cascading single
+# incident, matching doc §1.3.2's "multiple unrelated faults" L4+
+# pattern.
+faults:
+  - id: f.k8s.configmap-key-renamed
+    params: { configmap: billing-config, old_key: DB_HOST, new_key: DATABASE_HOST }
+    apply_at: T0
+  - id: f.k8s.pvc-storageclass-missing
+    params: { pvc: billing-data, wrong_storage_class: fast-ssd-premium }
+    apply_at: T0
+  - id: f.k8s.networkpolicy-overblocks-traffic
+    params: { missing_dependency: payment-service, known_dependencies: "auth-service,config-service" }
+    apply_at: T0
+  - id: f.k8s.resourcequota-blocks-deploy
+    params: { quota_name: billing-quota, hard_cpu: "500m" }
+    apply_at: T0
+
+process_signals:
+  diagnostic_efficiency:
+    good_actions:
+      - "kubectl describe pod"
+      - "kubectl logs"
+      - "kubectl get events"
+      - "kubectl get configmap"
+      - "kubectl get pvc"
+      - "kubectl get storageclass"
+      - "kubectl get networkpolicy"
+      - "kubectl describe resourcequota"
+    bad_actions:
+      - "kubectl delete pod --all"
+      - "kubectl rollout restart"
+      - "kubectl delete deploy"
+      - "kubectl delete networkpolicy --all"
+    scoring: ratio_and_ordering
+  blast_radius:
+    forbidden:
+      - "kubectl delete ns"
+      - "kubectl delete namespace"
+      - "terraform destroy"
+
+tasks:
+  - key: t1
+    title: "INC-5102 (P2): billing-service pods stuck in CreateContainerConfigError"
+    required: true
+    instructions_md: |
+      **INC-5102 — P2.** `billing-service`'s pods are stuck in
+      `CreateContainerConfigError` and never start. On-call escalated
+      this after a routine platform-team migration last night.
+
+      **Business impact:** billing-service has zero running replicas.
+
+      **Access:** read-write `kubectl` access to this namespace.
+
+      **Runbook (deliberately incomplete):** "Migration last night
+      touched networking, storage classes, and some ConfigMaps. Start
+      with whatever's actually crashing."
+
+      Diagnose and fix why the pods can't even start.
+    validators:
+      - id: v.billing-pods-running
+        type: K8S_ASSERT
+        run: "kubectl get pods -l app=billing-service -o jsonpath='{.items[?(@.status.phase==\"Running\")].metadata.name}'"
+        expect:
+          jsonpath: "$"
+          op: not_empty
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "billing-service still has no Running pods. `kubectl describe pod` shows the exact config error."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "CreateContainerConfigError almost always means a referenced ConfigMap or Secret key doesn't exist -- check what the Deployment actually references vs. what the ConfigMap actually has."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: "billing-data PVC stuck Pending"
+    required: true
+    instructions_md: |
+      The `billing-data` PersistentVolumeClaim has been stuck in
+      `Pending` since the migration. Any pod mounting it will be
+      unschedulable once it exists.
+
+      Diagnose and fix the PVC so it binds.
+    validators:
+      - id: v.pvc-bound
+        type: K8S_ASSERT
+        run: "kubectl get pvc billing-data -o jsonpath='{.status.phase}'"
+        expect:
+          jsonpath: "$"
+          op: eq
+          value: "Bound"
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "billing-data is still not Bound. `kubectl describe pvc billing-data` and `kubectl get storageclass` will show whether the referenced class actually exists."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "Compare spec.storageClassName on the PVC against `kubectl get storageclass` -- one of these doesn't match reality."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t3
+    title: "billing-service can't reach payment-service"
+    required: true
+    instructions_md: |
+      billing-service's calls to `payment-service` are timing out (not
+      being refused -- a default-deny NetworkPolicy signature). Other
+      dependencies (auth-service, config-service) work fine.
+
+      Diagnose and fix the allow-list gap.
+    validators:
+      - id: v.billing-can-reach-payment
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/billing-service -- wget -q -T 5 -O- http://payment-service/healthz"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "billing-service still can't reach payment-service. `kubectl get networkpolicy -o yaml` — compare the allow rule's podSelector against payment-service's real labels."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "A default-deny NetworkPolicy plus a real allow-list means SOME dependencies work and others don't -- the allow-list itself is incomplete, not broken."
+    solution_apply: scripts/t3_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t4
+    title: "Scaling billing-service silently has no effect"
+    required: true
+    instructions_md: |
+      `kubectl scale deploy/billing-service --replicas=3` reports
+      success but the Deployment stays at 1 replica.
+
+      Diagnose and fix why the scale-up is being silently rejected.
+    validators:
+      - id: v.billing-scaled
+        type: K8S_ASSERT
+        run: "kubectl get deploy billing-service -o jsonpath='{.status.readyReplicas}'"
+        expect:
+          jsonpath: "$"
+          op: gte
+          value: 3
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "billing-service still isn't at 3 ready replicas. `kubectl get events` and `kubectl describe resourcequota` will show the real rejection reason."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "`kubectl scale` succeeding while replicas don't increase means the ReplicaSet controller is being rejected at admission time, not failing silently on its own -- check ResourceQuota."
+    solution_apply: scripts/t4_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+artifacts_required:
+  - key: incident-note
+    type: MARKDOWN
+    rubric: rub.incident-note.v2
+
+scoring:
+  profile: sp.production-sim.default
+
+ai_mentor:
+  persona: senior_engineer
+  max_hints: 4
+  token_budget: 10000
+  solution_visibility: HIDDEN
+  policy: policy.sim.socratic.v1
+
+reference_solution:
+  repo_path: solutions/sim.k8s.platform-migration-incident/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

@@ -1,0 +1,219 @@
+id: sim.sre.checkout-latency-incident
+version: 1
+mode: PRODUCTION_SIM
+status: DRAFT
+
+meta:
+  title: "INC-4471: Checkout service latency spike under load"
+  summary: >
+    A checkout service's readiness probe is misconfigured and its memory
+    limit is too tight; diagnose both under production-like traffic,
+    fix them, and write the incident note.
+  difficulty_level: L4
+  estimated_minutes: 45
+  locale: en
+  authors: [content-team]
+  tags: [sre, incident-response, kubernetes, troubleshooting]
+
+curriculum:
+  primary_topic: topic.sre.incident-diagnosis
+  also_relevant: [topic.sre.slo-error-budgets]
+  courses: [course.sre]
+
+skills:
+  - skill: sre.incident-response-process
+    weight: 0.4
+    primary: true
+    bloom: analyze
+  - skill: sre.postmortem-authorship
+    weight: 0.3
+    primary: false
+    bloom: create
+  - skill: k8s.troubleshooting
+    weight: 0.3
+    primary: false
+    bloom: analyze
+
+prerequisites:
+  hard: [k8s.troubleshooting, sre.incident-response-process]
+  soft: [sre.slo-error-budgets]
+
+objectives:
+  - Diagnose why checkout pods are failing readiness checks and OOM-restarting under load
+  - Fix the readiness probe timeout and memory limit without redeploying from scratch
+  - Confirm the service meets its SLO under a sustained synthetic load spike
+  - Write a root-cause/timeline/remediation/prevention incident note
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "2"
+    memory: 3Gi
+    disk: 5Gi
+  ttl_minutes: 60
+  idle_timeout_minutes: 15
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.checkout-deployment.v1
+  cost_budget_usd: 0.35
+
+surfaces: [terminal, editor, k8s_dashboard_readonly]
+
+# Doc §3.3: "Break AFTER verifying healthy -- otherwise you cannot
+# distinguish 'authored fault' from 'provisioning flake.'" Phase 1's
+# actual gate is still pod-Ready (this field documents the richer intent
+# per contracts/activity_spec.schema.json's own comment on health_gate);
+# an HTTP probe against the checkout Service is the concrete richer check
+# this activity wants once that gate exists.
+health_gate:
+  - type: HTTP_PROBE
+    url: "http://checkout/healthz"
+    expect_status: 200
+    retries: 30
+
+# Both faults here are real, wired handlers (orchestrator/internal/
+# faultinjection/handlers.go, handlers_batch2.go) -- verified by their own
+# unit tests, not aspirational content. f.load.traffic-spike (handlers_
+# batch3.go) escalates at T+300 once the learner has had time to
+# diagnose the two static faults first, matching doc §1.3.2's "scripted
+# secondary event at T+N minutes" L4+ pattern.
+faults:
+  - id: f.k8s.readiness-probe-too-aggressive
+    params: { service: checkout, timeout_seconds: "1" }
+    apply_at: T0
+  - id: f.k8s.memory-limit-too-low
+    params: { service: checkout, limit: 96Mi }
+    apply_at: T0
+  - id: f.load.traffic-spike
+    params: { target_url: "http://checkout", rps: "20", duration_s: "120" }
+    apply_at: "T+300"
+
+process_signals:
+  diagnostic_efficiency:
+    good_actions:
+      - "kubectl describe pod"
+      - "kubectl logs"
+      - "kubectl get events"
+      - "kubectl top pod"
+      - "kubectl describe deploy"
+    bad_actions:
+      - "kubectl delete pod --all"
+      - "kubectl rollout restart"
+      - "kubectl delete deploy"
+    scoring: ratio_and_ordering
+  blast_radius:
+    forbidden:
+      - "kubectl delete ns"
+      - "kubectl delete namespace"
+      - "terraform destroy"
+
+tasks:
+  - key: t1
+    title: "INC-4471 (P2): Checkout intermittently failing readiness checks"
+    required: true
+    instructions_md: |
+      **INC-4471 — P2.** The `checkout` Deployment's pods are cycling
+      between Ready and NotReady, and some pods are restarting outright.
+      On-call escalated this to you.
+
+      **Business impact:** intermittent checkout failures; error budget
+      burn is elevated.
+
+      **Access:** read-write `kubectl` access to this namespace's
+      `checkout` Deployment.
+
+      **Runbook (deliberately incomplete):** "Checkout has had readiness
+      issues before, usually a probe or resource config problem. Check
+      the usual places."
+
+      Diagnose and fix the underlying configuration so `checkout`'s pods
+      stay Ready and stop restarting under load, including once the
+      traffic spike at T+300s begins. Once resolved, submit an incident
+      note (root cause, detection, timeline, remediation, prevention) --
+      it's graded separately against `rub.incident-note.v2`.
+    validators:
+      - id: v.checkout-slo
+        type: HTTP_SLO
+        run: "http://checkout/healthz"
+        expect:
+          success_rate_min: 0.99
+          window_s: 60
+        weight: 0.6
+        severity: BLOCKING
+        on_fail: "checkout isn't meeting its 99% success-rate SLO yet. Check both the readiness probe config and the memory limit -- `kubectl describe pod` shows both symptoms."
+      - id: v.checkout-ready-replicas
+        type: K8S_ASSERT
+        run: "kubectl get deploy checkout -o jsonpath='{.status.readyReplicas}'"
+        expect:
+          jsonpath: "$"
+          op: gte
+          value: 1
+        weight: 0.4
+        severity: BLOCKING
+        on_fail: "checkout has no Ready replicas. `kubectl get pods` and `kubectl describe pod <name>` will show whether it's still the probe, the memory limit, or both."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "Two separate misconfigurations are present, not one -- fixing only one won't fully resolve the incident."
+      - level: 2
+        penalty: 0.08
+        text: "`kubectl describe pod` shows both a readiness-probe failure reason and, separately, an OOMKilled last-state if you look at both fields."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+# The incident note is an activity-level artifact (artifacts_required
+# below), not a per-task validator -- ArtifactService.submit/gradeArtifact
+# key by activity_version + artifact key, independent of `tasks`
+# (confirmed: artifact.service.ts's spec lookup reads spec.artifacts_
+# required directly, with no task association at all). A second "write
+# the note" task with no real validator would fail schema validation
+# (tasks require >=1 validator) for a check that isn't how this
+# mechanism actually works -- the instructions_md above already directs
+# the learner to submit the note; completion.rule below only requires
+# the required *task* (t1) to pass, matching doc §1.3.2's own framing
+# that the artifact is graded ("incident note -- validated by AI rubric")
+# as a distinct evaluation step, not gating task completion itself.
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+# NO_REGRESSION intentionally NOT used here: it requires a CaptureBaseline
+# RPC call before the fault applies (contracts/orchestrator.proto), and
+# no automatic wiring exists yet in AttemptService's provisioning flow to
+# make that call for content-authored activities (confirmed:
+# GrpcValidatorExecutor.captureBaseline exists and works when invoked
+# directly -- see scripts/verify-no-regression.ts -- but nothing calls it
+# during a normal attempt's health-gate step). Authoring a NO_REGRESSION
+# validator into this activity would reference a baseline that never
+# gets captured, so it would always fail with "no baseline found"
+# regardless of what the learner does -- exactly the "validator passes
+# trivially or fails unconditionally" defect doc §3.5's golden-path/
+# null-path CI exists to catch. Real fix is wiring an automatic
+# CaptureBaseline call into the health-gate step; out of scope for
+# authoring this activity, flagged here rather than shipping a validator
+# known to always fail.
+artifacts_required:
+  - key: incident-note
+    type: MARKDOWN
+    rubric: rub.incident-note.v2
+
+scoring:
+  profile: sp.production-sim.default
+
+ai_mentor:
+  persona: senior_engineer
+  max_hints: 4
+  token_budget: 10000
+  solution_visibility: HIDDEN
+  policy: policy.sim.socratic.v1
+
+reference_solution:
+  repo_path: solutions/sim.sre.checkout-latency-incident/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

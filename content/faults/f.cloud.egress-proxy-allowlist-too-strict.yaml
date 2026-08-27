@@ -1,28 +1,41 @@
 id: f.cloud.egress-proxy-allowlist-too-strict
-version: 1
-title: A legitimate outbound dependency is missing from the egress allowlist
-summary: A workload needs to call an external API, but the platform's egress proxy allowlist doesn't include that domain, so calls fail with a proxy-level block rather than an app error.
+version: 2
+title: The namespace's egress-proxy NetworkPolicy is missing or misconfigured
+summary: A workload needs to reach the platform's egress proxy for any outbound call, but the namespace's own NetworkPolicy allowing that path is missing, so every outbound call times out at the network layer rather than reaching the proxy at all.
 
 targets: [cloud.networking]
 symptom_class: EgressBlocked
 skills_probed: [cloud.zero-trust-security, cloud.api-container-security]
 
+# v2 diagnostic path corrected against the real execution mechanism
+# (orchestrator/internal/faultinjection/handlers_batch4.go): this fault
+# removes the namespace's own allow-egress-proxy NetworkPolicy (internal/
+# k8s/provision.go's applyEgressProxyAllowlist), so the connection never
+# reaches the shared Squid proxy at all -- a connection timeout, not an
+# HTTP-level 403. v1's "403 from the proxy / check proxy access logs"
+# framing described a different failure mode (a Squid-side ACL deny) that
+# would require per-namespace proxy instances to implement safely; the
+# shared, single-Squid-deployment architecture this platform actually has
+# cannot safely produce that symptom for one learner without affecting
+# every other concurrent environment (see this fault's own handler
+# implementation comment for the full blast-radius reasoning). v2 teaches
+# the network-policy-layer failure mode instead, which is both safe to
+# implement and a realistic, common production incident in its own right.
 canonical_diagnostic_path:
-  - "app logs → outbound call fails with a 403 from the proxy, not the target API"
-  - "check egress proxy access logs → confirm the domain was denied by policy"
-  - "check the platform's egress allowlist configuration for that namespace/workload"
+  - "app logs → outbound call hangs and eventually times out (no response at all, not an HTTP error)"
+  - "kubectl get networkpolicy → notice allow-egress-proxy is missing from this namespace"
+  - "kubectl describe networkpolicy (on a working namespace) → compare against what's missing here"
+  - "curl -v <external-url> from inside the workspace → connection times out reaching the egress proxy, confirming this is a network-layer block, not an application error"
 
-expected_fix_class: [add_domain_to_allowlist, request_allowlist_exception]
+expected_fix_class: [restore_egress_networkpolicy, request_platform_support]
 detectability: medium
 mean_time_to_diagnose_minutes: 8
 
 params_schema:
   namespace:
     type: string
-    description: Target namespace whose egress policy applies.
-  blocked_domain:
-    type: string
-    description: The legitimate domain that should be missing from the allowlist.
+    description: Target namespace whose egress-proxy NetworkPolicy should be removed. Defaults to the environment's own namespace if omitted.
 
 reversible: true
 min_tier: T1_SHARED_CONTAINER
+handler_implemented: true

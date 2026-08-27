@@ -9,7 +9,8 @@
  * reload doesn't re-mint a token on every request, and re-fetches once
  * the cached one is within 5 minutes of its stated expiry.
  */
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
+import { API_BASE_URL } from './config';
+
 const STORAGE_KEY = 'pe_dev_token';
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 

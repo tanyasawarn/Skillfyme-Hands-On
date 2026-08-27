@@ -3,6 +3,8 @@ import { sql, type Kysely } from 'kysely';
 import { KYSELY } from '../../db/database.module';
 import type { Database } from '../../db/schema';
 import { BktService, type BktParams } from './bkt.service';
+import { MasteryConstants } from '../../common/constants';
+import { EloService, type EloOutcome } from './elo.service';
 
 export interface RecordEvidenceInput {
   userId: string;
@@ -15,12 +17,163 @@ export interface RecordEvidenceInput {
   wasGenuineAttempt: boolean;
 }
 
+export interface RecordEloMatchInput {
+  userId: string;
+  /** Primary skill of the attempted activity -- doc §2.6 treats one attempt as one learner-vs-activity match, so exactly one skill anchors it. */
+  skillId: string;
+  activityVersionId: string;
+  outcome: EloOutcome;
+}
+
+export interface RecordEloMatchResult {
+  /** (activityElo - learnerElo)/400 computed from ratings *before* this match -- feeds BktService's difficultyAdjust, doc §2.4 step 2. */
+  difficultyAdjust: number;
+}
+
 @Injectable()
 export class MasteryService {
   constructor(
     @Inject(KYSELY) private readonly db: Kysely<Database>,
     private readonly bkt: BktService,
+    private readonly elo: EloService,
   ) {}
+
+  /**
+   * Doc §2.6: "Treat each attempt as a match." Reads the learner's
+   * current elo_rating for skillId (skill.skill_mastery.elo_rating,
+   * defaulting to the population rating) and the activity's
+   * difficulty_elo (content.activity_version, defaulting the same way),
+   * runs one Elo match, and persists both sides in one transaction so
+   * they can never drift out of sync with each other.
+   *
+   * Callers must call this *before* recordEvidence for the same
+   * (user, skill) so recordEvidence's difficultyAdjust reflects the
+   * pre-match ratings (doc §2.4 step 2 compares the activity's
+   * difficulty against the learner's rating *at attempt time*, not
+   * after this match has already moved it) -- and must call
+   * recordEvidence for that same skill afterward regardless of this
+   * method's result. If no skill_mastery row exists yet (a learner's
+   * very first attempt at this skill), this method itself seeds one
+   * (p_mastery from skill.bkt_p_init, elo_rating from this match's
+   * result) rather than relying on recordEvidence to run first --
+   * recordEvidence's own upsert then only touches p_mastery/evidence
+   * fields on that same row, leaving elo_rating untouched.
+   *
+   * activityAttemptCount (for K_a's >500-attempt freeze) is a live count
+   * of attempt.attempt rows against this activity_version rather than a
+   * denormalised counter column -- attempt volume per activity is small
+   * enough that this is not a hot-path concern, and it can never drift
+   * from the attempt table itself.
+   *
+   * Both the learner's skill_mastery row and the activity_version row are
+   * read with `FOR UPDATE` inside the transaction, holding a row lock for
+   * its duration. Without this, two genuinely concurrent matches on the
+   * same (user, skill) or activity (e.g. two attempts finishing at once)
+   * can both read the same pre-match rating under Postgres's default READ
+   * COMMITTED isolation and unknowingly overwrite each other's update --
+   * a lost-update race. The lock serialises concurrent matches instead of
+   * losing one silently.
+   */
+  async recordEloMatch(
+    input: RecordEloMatchInput,
+  ): Promise<RecordEloMatchResult> {
+    return this.db.transaction().execute(async (trx) => {
+      const learnerRow = await trx
+        .selectFrom('skill.skill_mastery')
+        .select('elo_rating')
+        .where('user_id', '=', input.userId)
+        .where('skill_id', '=', input.skillId)
+        .forUpdate()
+        .executeTakeFirst();
+      const learnerElo =
+        learnerRow?.elo_rating != null
+          ? Number(learnerRow.elo_rating)
+          : this.elo.defaultRating();
+
+      const activityRow = await trx
+        .selectFrom('content.activity_version')
+        .select('difficulty_elo')
+        .where('id', '=', input.activityVersionId)
+        .forUpdate()
+        .executeTakeFirstOrThrow();
+      const activityElo =
+        activityRow.difficulty_elo != null
+          ? Number(activityRow.difficulty_elo)
+          : this.elo.defaultRating();
+
+      const learnerMatches = await trx
+        .selectFrom('skill.mastery_evidence')
+        .select((eb) => eb.fn.countAll().as('count'))
+        .where('user_id', '=', input.userId)
+        .where('skill_id', '=', input.skillId)
+        .executeTakeFirst();
+      const learnerMatchCount = Number(learnerMatches?.count ?? 0);
+
+      const activityAttempts = await trx
+        .selectFrom('attempt.attempt')
+        .select((eb) => eb.fn.countAll().as('count'))
+        .where('activity_version_id', '=', input.activityVersionId)
+        .executeTakeFirst();
+      const activityAttemptCount = Number(activityAttempts?.count ?? 0);
+
+      const result = this.elo.update({
+        learnerElo,
+        activityElo,
+        learnerMatchCount,
+        activityAttemptCount,
+        outcome: input.outcome,
+      });
+
+      // Upsert rather than update-only: a learner's very first Elo match
+      // in a skill-cluster (no prior skill_mastery row) must still
+      // persist a rating, not silently no-op. p_mastery has no default
+      // and NOT NULL -- seed it from the skill's own bkt_p_init so a
+      // fresh row is never invented with an arbitrary mastery value. If
+      // recordEvidence has already run for this (user, skill) this
+      // insert conflicts harmlessly and only elo_rating is touched.
+      if (!learnerRow) {
+        const skillDefaults = await trx
+          .selectFrom('skill.skill')
+          .select('bkt_p_init')
+          .where('id', '=', input.skillId)
+          .executeTakeFirstOrThrow();
+        await trx
+          .insertInto('skill.skill_mastery')
+          .values({
+            user_id: input.userId,
+            skill_id: input.skillId,
+            p_mastery: skillDefaults.bkt_p_init,
+            elo_rating: result.learnerElo,
+          })
+          .onConflict((oc) =>
+            oc.columns(['user_id', 'skill_id']).doUpdateSet({
+              elo_rating: result.learnerElo,
+            }),
+          )
+          .execute();
+      } else {
+        await trx
+          .updateTable('skill.skill_mastery')
+          .set({ elo_rating: result.learnerElo })
+          .where('user_id', '=', input.userId)
+          .where('skill_id', '=', input.skillId)
+          .execute();
+      }
+
+      // Doc §2.6 "recalibrated nightly from attempt outcomes" -- run
+      // synchronously per-match here instead, which is strictly more
+      // current than a nightly batch and needs no separate job.
+      // migration 0007 narrows the PUBLISHED-immutability trigger to
+      // permit exactly this column.
+      await trx
+        .updateTable('content.activity_version')
+        .set({ difficulty_elo: result.activityElo })
+        .where('id', '=', input.activityVersionId)
+        .execute();
+
+      return { difficultyAdjust: result.difficultyAdjust };
+    });
+  }
 
   /**
    * Doc §2.4 step 5 + §8.4 "mastery_evidence links every mastery change to
@@ -173,7 +326,9 @@ export class MasteryService {
       rows.map((r) => [r.skill_id, Number(r.p_mastery)]),
     );
     return requiresAncestorSkillIds.every(
-      (id) => (masteryBySkill.get(id) ?? 0) >= 0.55,
+      (id) =>
+        (masteryBySkill.get(id) ?? 0) >=
+        MasteryConstants.REQUIRES_GATE_THRESHOLD,
     );
   }
 }

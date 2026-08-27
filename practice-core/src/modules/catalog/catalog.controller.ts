@@ -1,13 +1,8 @@
-import {
-  Controller,
-  Get,
-  NotFoundException,
-  Param,
-  Query,
-} from '@nestjs/common';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 import { CatalogRepository } from './catalog.repository';
 import { AuthUser } from '../auth/auth-user.decorator';
 import type { AuthClaims } from '../auth/auth.types';
+import { findOrThrow } from '../../common/find-or-throw';
 
 /**
  * Doc §8.3: "GET /v1/practice/activities?course&skill&mode&difficulty..."
@@ -48,11 +43,9 @@ export class CatalogController {
 
   @Get(':activityVersionId')
   async getOne(@Param('activityVersionId') activityVersionId: string) {
-    const version = await this.catalog.getVersionById(activityVersionId);
-    if (!version)
-      throw new NotFoundException(
-        `activity version ${activityVersionId} not found`,
-      );
-    return version;
+    return findOrThrow(
+      await this.catalog.getVersionById(activityVersionId),
+      `activity version ${activityVersionId} not found`,
+    );
   }
 }

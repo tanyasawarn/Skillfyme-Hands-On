@@ -11,8 +11,7 @@
  */
 
 import { getAuthToken } from './auth-token';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001';
+import { API_BASE_URL } from './config';
 
 export interface CatalogEntry {
   activity_id: string;
@@ -30,6 +29,15 @@ export interface ActivitySpec {
   meta?: { title?: string; summary?: string };
   objectives?: string[];
   tasks?: Array<{ key: string; title: string; required: boolean; instructions_md: string }>;
+  /**
+   * Content-authored per lab: which workspace panes this activity's
+   * tasks actually need. 'editor' is present on labs that require
+   * authoring/inspecting a file directly (K8s manifests, Terraform,
+   * Dockerfiles, CI/CD configs, ...); terminal-only labs (git basics,
+   * filesystem navigation, etc.) omit it. Every published spec sets
+   * this explicitly -- see content/activities/*.yaml.
+   */
+  surfaces?: Array<'terminal' | 'editor'>;
 }
 
 export interface CatalogEntryDetail extends CatalogEntry {
@@ -112,6 +120,24 @@ export interface AttemptTaskState {
   attempts_count: number;
   hints_used_max_level: number;
   skipped: boolean;
+}
+
+/**
+ * POST /v1/practice/attempts/{id}/check -- learner-triggered validation
+ * ("Check my work"). Runs the validator set without ending the attempt.
+ */
+export interface AttemptCheckResult {
+  tasks: Array<{
+    task_key: string;
+    required: boolean;
+    passed: boolean;
+    validators: Array<{
+      validator_id: string;
+      status: 'PASS' | 'FAIL' | 'ERROR' | 'SKIP';
+      severity: 'BLOCKING' | 'WARN';
+    }>;
+  }>;
+  all_required_passed: boolean;
 }
 
 /** Doc §7.5 hint ladder, static-authored subset. */
@@ -233,6 +259,8 @@ export const api = {
 
   provisionAttempt: (id: string) => request<Attempt>(`/v1/practice/attempts/${id}/provision`, { method: 'POST' }),
   startAttempt: (id: string) => request<Attempt>(`/v1/practice/attempts/${id}/start`, { method: 'POST' }),
+  checkAttempt: (id: string) =>
+    request<AttemptCheckResult>(`/v1/practice/attempts/${id}/check`, { method: 'POST' }),
   submitAttempt: (id: string) => request<Attempt>(`/v1/practice/attempts/${id}/submit`, { method: 'POST' }),
   connectAttempt: (id: string) => request<ConnectInfo>(`/v1/practice/attempts/${id}/connect`, { method: 'POST' }),
 

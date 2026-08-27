@@ -1,7 +1,5 @@
-import { Inject, Injectable } from '@nestjs/common';
-import type { Kysely } from 'kysely';
-import { KYSELY } from '../../db/database.module';
-import type { Database } from '../../db/schema';
+import { Injectable } from '@nestjs/common';
+import { BaseRepository } from '../../common/base.repository';
 
 /**
  * Doc §2.1 (D5): "Maintain a Curriculum Hierarchy and a Skill Graph as
@@ -12,9 +10,7 @@ import type { Database } from '../../db/schema';
  * only writer there, per the doc's "never conflate them" rule.
  */
 @Injectable()
-export class CurriculumRepository {
-  constructor(@Inject(KYSELY) private readonly db: Kysely<Database>) {}
-
+export class CurriculumRepository extends BaseRepository {
   async createCourse(input: { tenantId: string; slug: string; title: string }) {
     return this.db
       .insertInto('content.course')

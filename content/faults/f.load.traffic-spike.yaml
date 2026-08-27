@@ -18,6 +18,9 @@ detectability: high
 mean_time_to_diagnose_minutes: 5
 
 params_schema:
+  target_url:
+    type: string
+    description: In-cluster URL to direct load at, e.g. http://checkout.<namespace>.svc.cluster.local.
   rps:
     type: integer
     description: Requests per second to generate.
@@ -27,3 +30,4 @@ params_schema:
 
 reversible: true
 min_tier: T1_SHARED_CONTAINER
+handler_implemented: true

@@ -1,0 +1,178 @@
+id: sim.k8s.rollout-stuck-incident
+version: 1
+mode: PRODUCTION_SIM
+status: DRAFT
+
+meta:
+  title: "INC-5203: two independent rollouts stuck mid-deploy"
+  summary: >
+    A Deployment rollout referencing a nonexistent image tag and a
+    StatefulSet rollout stuck on one ordinal's readiness probe both
+    stalled during the same release window -- diagnose and fix both.
+  difficulty_level: L3
+  estimated_minutes: 35
+  locale: en
+  authors: [content-team]
+  tags: [k8s, incident-response, troubleshooting, deployments]
+
+curriculum:
+  primary_topic: topic.devops.cloud-k8s-serverless
+  also_relevant: [topic.sre.incident-diagnosis]
+  courses: [course.sre]
+
+skills:
+  - skill: k8s.troubleshooting
+    weight: 0.5
+    primary: true
+    bloom: analyze
+  - skill: sre.postmortem-authorship
+    weight: 0.3
+    primary: false
+    bloom: create
+  - skill: k8s.production-deployments
+    weight: 0.2
+    primary: false
+    bloom: analyze
+
+prerequisites:
+  hard: [k8s.troubleshooting]
+  soft: []
+
+objectives:
+  - Diagnose and fix a Deployment rollout stuck on a nonexistent image tag
+  - Diagnose and fix a StatefulSet rollout stuck on one ordinal's readiness failure
+  - Write a root-cause/timeline/remediation/prevention incident note
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "2"
+    memory: 2Gi
+    disk: 5Gi
+  ttl_minutes: 45
+  idle_timeout_minutes: 15
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.rollout-workloads.v1
+  cost_budget_usd: 0.30
+
+surfaces: [terminal, editor, k8s_dashboard_readonly]
+
+health_gate:
+  - type: HTTP_PROBE
+    url: "http://web-frontend/"
+    expect_status: 200
+    retries: 30
+
+faults:
+  - id: f.k8s.rollout-stuck-bad-image-tag
+    params: { deployment: web-frontend, bad_tag: "v99-does-not-exist" }
+    apply_at: T0
+  - id: f.k8s.statefulset-ordinal-stuck
+    params: { statefulset: cache-cluster, stuck_ordinal: 1 }
+    apply_at: T0
+
+process_signals:
+  diagnostic_efficiency:
+    good_actions:
+      - "kubectl rollout status"
+      - "kubectl describe pod"
+      - "kubectl rollout history"
+      - "kubectl get pods"
+      - "kubectl describe statefulset"
+    bad_actions:
+      - "kubectl delete pod --all"
+      - "kubectl delete deploy"
+      - "kubectl delete statefulset"
+    scoring: ratio_and_ordering
+  blast_radius:
+    forbidden:
+      - "kubectl delete ns"
+      - "kubectl delete namespace"
+
+tasks:
+  - key: t1
+    title: "INC-5203 (P3): web-frontend rollout stuck"
+    required: true
+    instructions_md: |
+      **INC-5203 — P3.** `kubectl rollout status deploy/web-frontend`
+      hangs and never completes. The previous revision was working
+      fine.
+
+      **Access:** read-write `kubectl` access to this namespace.
+
+      Diagnose and fix why the new revision never becomes Ready.
+    validators:
+      - id: v.frontend-rollout-complete
+        type: K8S_ASSERT
+        run: "kubectl get deploy web-frontend -o jsonpath='{.status.readyReplicas}'"
+        expect:
+          jsonpath: "$"
+          op: gte
+          value: 2
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "web-frontend still doesn't have 2 ready replicas. `kubectl describe pod` on the newest ReplicaSet's pods will show the real pull failure."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "`kubectl rollout status` hanging forever (not erroring) plus ImagePullBackOff on the new pods means the image reference itself is the problem, not the app."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: "cache-cluster StatefulSet rollout stuck"
+    required: true
+    instructions_md: |
+      `cache-cluster-1` never becomes Ready, and because StatefulSets
+      roll out strictly in ordinal order, `cache-cluster-2` is stuck
+      waiting behind it.
+
+      Diagnose and fix the stuck ordinal.
+    validators:
+      - id: v.cache-cluster-all-ready
+        type: K8S_ASSERT
+        run: "kubectl get statefulset cache-cluster -o jsonpath='{.status.readyReplicas}'"
+        expect:
+          jsonpath: "$"
+          op: gte
+          value: 3
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "cache-cluster still isn't fully Ready. `kubectl describe pod cache-cluster-1` will show the actual readiness failure reason."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "Only pods below a certain ordinal are healthy -- that ordinal's own pod-specific config is what's broken, not the StatefulSet template as a whole."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+artifacts_required:
+  - key: incident-note
+    type: MARKDOWN
+    rubric: rub.incident-note.v2
+
+scoring:
+  profile: sp.production-sim.default
+
+ai_mentor:
+  persona: senior_engineer
+  max_hints: 3
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.sim.socratic.v1
+
+reference_solution:
+  repo_path: solutions/sim.k8s.rollout-stuck-incident/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

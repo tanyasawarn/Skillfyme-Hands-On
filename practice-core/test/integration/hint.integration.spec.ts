@@ -6,15 +6,22 @@ import { EligibilityService } from '../../src/modules/attempt/eligibility.servic
 import { HintService } from '../../src/modules/attempt/hint.service';
 import { EventStoreRepository } from '../../src/modules/event-store/event-store.repository';
 import { FakeOrchestratorClient } from '../../src/modules/attempt/fake-orchestrator.client';
+import { ConfigService } from '@nestjs/config';
 import { SkillRepository } from '../../src/modules/skill/skill.repository';
 import { MasteryService } from '../../src/modules/skill/mastery.service';
 import { BktService } from '../../src/modules/skill/bkt.service';
+import { EloService } from '../../src/modules/skill/elo.service';
 import { CatalogRepository } from '../../src/modules/catalog/catalog.repository';
 import { EvaluationService } from '../../src/modules/evaluation/evaluation.service';
 import { ValidatorRunnerService } from '../../src/modules/evaluation/validator-runner.service';
 import { ScoringEngineService } from '../../src/modules/evaluation/scoring-engine.service';
 import { FakeValidatorExecutor } from '../../src/modules/evaluation/fake-validator-executor';
 import { ReplayService } from '../../src/modules/event-store/replay.service';
+import { FaultRepository } from '../../src/modules/evaluation/fault.repository';
+import { ArtifactService } from '../../src/modules/evaluation/artifact.service';
+import { ActivitySpecReader } from '../../src/common/activity-spec-reader';
+import { RubricRepository } from '../../src/modules/evaluation/rubric.repository';
+import { FakeAiGrader } from '../../src/modules/evaluation/fake-ai-grader.service';
 import { createTestDb, truncateAll } from './test-db';
 
 describe('HintService (integration, real Postgres) — doc §7.5 static hint ladder', () => {
@@ -30,8 +37,10 @@ describe('HintService (integration, real Postgres) — doc §7.5 static hint lad
     db = createTestDb();
     const attemptRepo = new AttemptRepository(db);
     const skillRepo = new SkillRepository(db);
-    const mastery = new MasteryService(db, new BktService());
-    const eligibility = new EligibilityService(db, skillRepo, mastery);
+    const mastery = new MasteryService(db, new BktService(), new EloService());
+    const eligibility = new EligibilityService(db, skillRepo, mastery, {
+      get: () => undefined,
+    } as unknown as ConfigService);
     events = new EventStoreRepository(db);
     const orchestrator = new FakeOrchestratorClient(5);
     const validatorRunner = new ValidatorRunnerService(
@@ -47,6 +56,15 @@ describe('HintService (integration, real Postgres) — doc §7.5 static hint lad
       new ScoringEngineService(),
       mastery,
       replay,
+      new FaultRepository(),
+      new ArtifactService(
+        db,
+        events,
+        new RubricRepository(),
+        new FakeAiGrader(),
+        new ActivitySpecReader(db),
+      ),
+      attemptRepo,
     );
     attemptService = new AttemptService(
       db,
@@ -55,8 +73,10 @@ describe('HintService (integration, real Postgres) — doc §7.5 static hint lad
       events,
       orchestrator,
       evaluation,
+      validatorRunner,
+      replay,
     );
-    hints = new HintService(db, events);
+    hints = new HintService(db, events, new ActivitySpecReader(db));
     catalog = new CatalogRepository(db);
   });
 

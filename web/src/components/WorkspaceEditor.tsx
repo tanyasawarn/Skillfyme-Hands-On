@@ -3,7 +3,9 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Editor from '@monaco-editor/react';
-import { api, ApiError } from '@/lib/api-client';
+import { api } from '@/lib/api-client';
+import { toUserFacingError } from '@/lib/error-message';
+import { Button } from '@/components/ui/Button';
 
 /**
  * Doc §8.5's Monaco editor pane -- "client-side, file-API-backed" per
@@ -46,7 +48,7 @@ export function WorkspaceEditor({ attemptId }: { attemptId: string }) {
       setDirty(false);
       queryClient.invalidateQueries({ queryKey: ['workspace-file', attemptId, selectedPath] });
     } catch (err) {
-      setSaveError(err instanceof ApiError ? `Save failed: ${JSON.stringify(err.body)}` : 'Save failed');
+      setSaveError(`Save failed: ${toUserFacingError(err).headline}`);
     } finally {
       setSaving(false);
     }
@@ -64,13 +66,9 @@ export function WorkspaceEditor({ attemptId }: { attemptId: string }) {
             {selectedPath ?? 'Select a file to edit'}
           </span>
           {selectedPath && (
-            <button
-              onClick={save}
-              disabled={!dirty || saving}
-              className="lms-action-btn lms-action-btn--primary lms-action-btn--sm"
-            >
+            <Button onClick={save} disabled={!dirty || saving} size="sm">
               {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
-            </button>
+            </Button>
           )}
         </div>
 

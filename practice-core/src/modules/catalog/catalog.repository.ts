@@ -1,32 +1,47 @@
-import { Inject, Injectable, ConflictException } from '@nestjs/common';
-import type { Kysely, Transaction } from 'kysely';
-import { KYSELY } from '../../db/database.module';
+import { Injectable, ConflictException } from '@nestjs/common';
+import type { Transaction } from 'kysely';
 import type { ActivityVersionStatus, Database } from '../../db/schema';
+import type { ActivityMode, ActivitySpec } from './activity-spec';
+import { publishedActivityVersionsQuery } from '../../common/published-activity-versions-query';
+import { BaseRepository } from '../../common/base.repository';
 
 export interface PublishActivityVersionInput {
   tenantId: string;
   activitySlug: string;
-  mode: 'GUIDED_LAB' | 'PRODUCTION_SIM' | 'PROJECT';
-  spec: {
+  mode: ActivityMode;
+  // Partial<ActivitySpec>, not the full type: insertVersion() stores
+  // this object as-is into spec_jsonb, but real callers legitimately
+  // include only a subset -- test fixtures and the seed scripts publish
+  // deliberately minimal specs exercising just what each test/script
+  // needs, never a schema-complete object (that validation only happens
+  // when a spec is actually authored through admin.controller.ts's
+  // lint-then-publish path, via SpecLintService). PLAN.md Phase 3's K10:
+  // this interface previously declared its own ad-hoc partial shape,
+  // independently guessing at a subset of contracts/
+  // activity_spec.schema.json's fields rather than deriving from the one
+  // real canonical type -- Partial<ActivitySpec> keeps that same "any
+  // subset is accepted" contract while now checking every field that IS
+  // present against the real schema shape.
+  spec: Omit<
+    Partial<ActivitySpec>,
+    'id' | 'version' | 'meta' | 'environment' | 'skills'
+  > & {
     id: string;
     version: number;
-    meta: { difficulty_level: string; estimated_minutes: number };
-    environment: { blueprint: string; cost_budget_usd: number };
-    skills: Array<{
-      skill: string;
-      weight: number;
-      primary: boolean;
-      bloom?: string;
-    }>;
-    curriculum?: { primary_topic?: string; also_relevant?: string[] };
+    meta: Pick<ActivitySpec['meta'], 'difficulty_level' | 'estimated_minutes'> &
+      Partial<ActivitySpec['meta']>;
+    environment: Pick<
+      ActivitySpec['environment'],
+      'blueprint' | 'cost_budget_usd'
+    > &
+      Partial<ActivitySpec['environment']>;
+    skills: ActivitySpec['skills'];
   };
   publishedBy?: string;
 }
 
 @Injectable()
-export class CatalogRepository {
-  constructor(@Inject(KYSELY) private readonly db: Kysely<Database>) {}
-
+export class CatalogRepository extends BaseRepository {
   /**
    * Doc §3.6 rule 11: "Publishing creates a new version. Editing a
    * published version is impossible." This method only ever INSERTs a new
@@ -126,7 +141,7 @@ export class CatalogRepository {
         status,
         spec_jsonb: input.spec as unknown as Record<string, never>,
         blueprint_id: input.spec.environment.blueprint,
-        difficulty_level: input.spec.meta.difficulty_level as never,
+        difficulty_level: input.spec.meta.difficulty_level,
         estimated_minutes: input.spec.meta.estimated_minutes,
         cost_budget_usd: input.spec.environment.cost_budget_usd,
         // published_at/published_by only make sense once status actually
@@ -294,22 +309,22 @@ export class CatalogRepository {
   }
 
   async listPublishedCatalog(tenantId: string) {
-    return this.db
-      .selectFrom('content.activity_version as av')
-      .innerJoin('content.activity as a', 'a.id', 'av.activity_id')
-      .select([
-        'a.id as activity_id',
-        'a.slug',
-        'a.mode',
-        'av.id as activity_version_id',
-        'av.version',
-        'av.difficulty_level',
-        'av.estimated_minutes',
-        'av.cost_budget_usd',
-      ])
-      .where('a.tenant_id', '=', tenantId)
-      .where('av.status', '=', 'PUBLISHED')
-      .execute();
+    return publishedActivityVersionsQuery(
+      this.db
+        .selectFrom('content.activity_version as av')
+        .innerJoin('content.activity as a', 'a.id', 'av.activity_id')
+        .select([
+          'a.id as activity_id',
+          'a.slug',
+          'a.mode',
+          'av.id as activity_version_id',
+          'av.version',
+          'av.difficulty_level',
+          'av.estimated_minutes',
+          'av.cost_budget_usd',
+        ]),
+      tenantId,
+    ).execute();
   }
 
   /**

@@ -1,0 +1,81 @@
+# PLAN.md M1.11: "Base images... + DaemonSet pre-pull top 20." Doc §5.2:
+# "Image pull is the single biggest contributor to cold-start p95; treat
+# it as a performance budget item." Pre-pulls the one real workspace
+# image this platform builds today (registry:5000/practiceengine/
+# linux-tools:v1 -- see orchestrator/internal/orchestrator/server.go's
+# blueprintImage map, which every currently-published blueprint resolves
+# to) onto every node in the T1 pool, so a cold-provisioned pod's image
+# pull is a no-op cache hit instead of a real network pull blocking
+# time-to-ready.
+#
+# "Top 20" from the doc's own framing doesn't apply literally yet: this
+# platform has exactly ONE real workspace image built so far (confirmed:
+# orchestrator/images/ has only linux-tools/, python-ds and node were
+# deliberately not built ahead of real content needing them -- see that
+# Dockerfile's own comment). This DaemonSet pre-pulls that one image; add
+# more initContainers here as more base images are actually built, rather
+# than pre-pulling images that don't exist yet.
+#
+# Same local-dev caveat as runtimeclass-gvisor.yaml and manifests/t2's
+# node-pool docs: this targets the `practice-t1` node pool (doc §5.2's
+# node group), which doesn't exist as a distinct pool on this project's
+# single-node local k3s cluster -- applying this manifest locally is
+# harmless (a DaemonSet with no matching nodeSelector just doesn't
+# schedule anywhere until a labeled node exists), not a hard requirement
+# for local dev to work.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: image-prepull
+  namespace: practiceengine-platform
+  labels:
+    app: image-prepull
+spec:
+  selector:
+    matchLabels:
+      app: image-prepull
+  template:
+    metadata:
+      labels:
+        app: image-prepull
+    spec:
+      # Doc §5.2: "Node group: practice-t1". Matches the taint/label
+      # pair manifests/t1/node-pool-taint.md documents -- only runs on
+      # the T1 pool the workspace image is actually used on, not every
+      # node in the cluster (platform-namespace nodes don't need this
+      # image cached at all).
+      nodeSelector:
+        workload: learner
+      tolerations:
+        - key: workload
+          operator: Equal
+          value: learner
+          effect: NoSchedule
+      initContainers:
+        - name: prepull-linux-tools
+          image: registry:5000/practiceengine/linux-tools:v1
+          # Pre-pulling is the ENTIRE job -- imagePullPolicy: Always
+          # forces containerd to actually fetch (or confirm cached) the
+          # image on every DaemonSet pod (re)start, which is what keeps
+          # a node's cache warm after an image tag is republished; the
+          # container itself does nothing but exit immediately once the
+          # pull completes; there is no long-running workload here.
+          imagePullPolicy: Always
+          command: ["sh", "-c", "echo 'linux-tools:v1 pulled and cached' && exit 0"]
+          resources:
+            requests: {cpu: "10m", memory: "16Mi"}
+            limits: {cpu: "50m", memory: "32Mi"}
+      containers:
+        # DaemonSets require at least one container in addition to
+        # initContainers -- this one does nothing but sleep, its only
+        # purpose is satisfying that K8s API requirement so the
+        # initContainer's pull-and-cache behavior runs on every matching
+        # node and stays running (a DaemonSet re-triggers its
+        # initContainers only on pod recreation, not periodically, so
+        # this pod needs to keep existing, not just run once and exit).
+        - name: pause
+          image: registry:5000/practiceengine/linux-tools:v1
+          command: ["sh", "-c", "sleep infinity"]
+          resources:
+            requests: {cpu: "10m", memory: "16Mi"}
+            limits: {cpu: "50m", memory: "32Mi"}

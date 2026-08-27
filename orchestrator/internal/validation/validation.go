@@ -1,24 +1,30 @@
-// Package validation implements real execution for the 6 validator
-// types every currently-published lab actually uses (SHELL_ASSERT 69x,
-// K8S_ASSERT 34x, FILE_EXISTS 29x, FILE_CONTENT 21x, FILE_PARSE 8x,
-// SHELL_JSON 6x, per content/activities/*.yaml). Doc §6.2's real design
-// has Dev B (practice-core) executing validators itself against minted
-// read-only credentials (MintValidatorCredentials) -- that path isn't
+// Package validation implements real execution for the 7 validator
+// types this orchestrator can run: the 6 every currently-published lab
+// actually uses (SHELL_ASSERT 69x, K8S_ASSERT 34x, FILE_EXISTS 29x,
+// FILE_CONTENT 21x, FILE_PARSE 8x, SHELL_JSON 6x, per
+// content/activities/*.yaml), plus HTTP_SLO (PLAN.md Phase 2, no
+// published content uses it yet). Doc §6.2's real design has Dev B
+// (practice-core) executing validators itself against minted read-only
+// credentials (MintValidatorCredentials) -- that path isn't
 // implemented, same gap InjectFault/regression already worked around.
 // This package is the same pragmatic shortcut: SHELL_ASSERT/SHELL_JSON/
-// FILE_* exec non-interactively inside the workspace pod (no cluster
-// credentials needed there, same pattern as sessionbroker's telemetry
-// hook install); K8S_ASSERT executes via the orchestrator's own K8s API
-// access, since the workspace pod has no kubectl or cluster credentials
+// FILE_*/HTTP_SLO exec non-interactively inside the workspace pod (no
+// cluster credentials needed there, same pattern as sessionbroker's
+// telemetry hook install -- and for HTTP_SLO specifically, executing
+// from inside the pod means the check is bound by the same NetworkPolicy
+// the learner's own environment has, not an orchestrator-side bypass of
+// it); K8S_ASSERT executes via the orchestrator's own K8s API access,
+// since the workspace pod has no kubectl or cluster credentials
 // (confirmed live during InjectFault/CaptureBaseline work).
 //
-// The other 12 validator types in ValidatorSpec's type union
-// (HTTP_PROBE, HTTP_SLO, CLOUD_ASSERT, IAC_STATE, DB_QUERY, TEST_SUITE,
+// The other 11 validator types in ValidatorSpec's type union
+// (HTTP_PROBE, CLOUD_ASSERT, IAC_STATE, DB_QUERY, TEST_SUITE,
 // STATIC_ANALYSIS, PERF_BENCH, CHAOS_PROBE, TELEMETRY_ASSERT,
 // NO_REGRESSION, AI_RUBRIC) are NOT implemented here -- NO_REGRESSION has
 // its own real mechanism in internal/regression (CaptureBaseline/
-// CheckRegression, a separate RPC pair, not this one) but practice-core
-// doesn't call it yet; the rest have no authored content to execute
+// CheckRegression, a separate RPC pair, not this one), practice-core's
+// GrpcValidatorExecutor routes NO_REGRESSION there directly instead of
+// through ExecValidator; the rest have no authored content to execute
 // against and are honestly reported as unsupported, matching
 // faultinjection.ErrNoHandler's pattern.
 package validation
@@ -98,6 +104,8 @@ func Exec(ctx context.Context, provisioner *k8s.Provisioner, req Request) (Resul
 		result, err = execFileParse(execCtx, provisioner, req)
 	case "K8S_ASSERT":
 		result, err = execK8sAssert(execCtx, provisioner, req)
+	case "HTTP_SLO":
+		result, err = execHTTPSLO(execCtx, provisioner, req)
 	default:
 		return Result{}, ErrUnsupportedType{Type: req.ValidatorType}
 	}
@@ -173,10 +181,10 @@ func execInPod(ctx context.Context, provisioner *k8s.Provisioner, envID, cmd str
 	req := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Namespace(ns).
-		Name("workspace").
+		Name(k8s.WorkspacePodName).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
-			Container: "shell",
+			Container: k8s.WorkspaceContainerName,
 			Command:   []string{"/bin/bash", "-c", wrapped},
 			Stdin:     false,
 			Stdout:    true,

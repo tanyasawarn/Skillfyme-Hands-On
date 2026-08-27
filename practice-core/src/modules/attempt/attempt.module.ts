@@ -2,16 +2,21 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AttemptRepository } from './attempt.repository';
 import { AttemptService } from './attempt.service';
+import { CacheSweepService } from './cache-sweep.service';
 import { EligibilityService } from './eligibility.service';
 import { HintService } from './hint.service';
 import { WorkspaceFileService } from './workspace-file.service';
 import { AttemptController } from './attempt.controller';
+import { AttemptOwnershipGuard } from './attempt-ownership.guard';
+import { CommandExecutedConsumer } from './command-executed.consumer';
+import { EnvDestroyedConsumer } from './env-destroyed.consumer';
 import { FakeOrchestratorClient } from './fake-orchestrator.client';
 import { GrpcOrchestratorClient } from './grpc-orchestrator.client';
 import { ORCHESTRATOR_CLIENT } from './orchestrator-client.interface';
 import { SkillModule } from '../skill/skill.module';
 import { EventStoreModule } from '../event-store/event-store.module';
 import { EvaluationModule } from '../evaluation/evaluation.module';
+import { ActivitySpecReader } from '../../common/activity-spec-reader';
 
 @Module({
   imports: [SkillModule, EventStoreModule, EvaluationModule],
@@ -19,10 +24,15 @@ import { EvaluationModule } from '../evaluation/evaluation.module';
   providers: [
     AttemptRepository,
     AttemptService,
+    CacheSweepService,
     EligibilityService,
     HintService,
     WorkspaceFileService,
+    AttemptOwnershipGuard,
     GrpcOrchestratorClient,
+    EnvDestroyedConsumer,
+    CommandExecutedConsumer,
+    ActivitySpecReader,
     // PLAN.md Phase 0's "swap the mock" promise, delivered: real gRPC
     // client against Dev A's live Environment Orchestrator by default.
     // USE_FAKE_ORCHESTRATOR=true keeps FakeOrchestratorClient available

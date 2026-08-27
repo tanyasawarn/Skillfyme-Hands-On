@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+# Real bin entry for practice-cli (PLAN.md M1.2), resolved when this
+# package is installed/linked (`npm link`, or as a dependency elsewhere)
+# -- npm/node's bin-resolution mechanism runs THIS file directly via its
+# shebang, not through `npm run`. Delegates to scripts/practice-cli.ts
+# via ts-node, matching how every other content-tooling script in this
+# repo is invoked (no compiled-JS build step exists for scripts/, only
+# for src/ via `nest build`).
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+exec node -r ts-node/register -r tsconfig-paths/register "$SCRIPT_DIR/scripts/practice-cli.ts" "$@"

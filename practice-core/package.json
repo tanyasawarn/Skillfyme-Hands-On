@@ -5,13 +5,17 @@
   "author": "",
   "private": true,
   "license": "UNLICENSED",
+  "bin": {
+    "practice-cli": "./bin/practice-cli"
+  },
   "scripts": {
+    "practice-cli": "ts-node -r tsconfig-paths/register scripts/practice-cli.ts",
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
-    "start:prod": "node dist/main",
+    "start:prod": "node dist/src/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -19,9 +23,11 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:integration": "jest --config ./test/jest-integration.json",
-    "mint-dev-token": "ts-node -r tsconfig-paths/register scripts/mint-dev-token.ts"
+    "mint-dev-token": "ts-node -r tsconfig-paths/register scripts/mint-dev-token.ts",
+    "lint:boundaries": "eslint --config eslint.boundaries.mjs \"src/**/*.ts\" --max-warnings 0"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.120.0",
     "@grpc/grpc-js": "^1.14.4",
     "@grpc/proto-loader": "^0.8.1",
     "@nats-io/jetstream": "^3.4.0",
@@ -31,9 +37,12 @@
     "@nestjs/core": "^11.0.1",
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/throttler": "^6.5.0",
+    "@prometheus-io/client": "^0.16.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "dotenv": "^17.4.2",
+    "helmet": "^8.3.0",
     "js-yaml": "^5.3.0",
     "jsonwebtoken": "^9.0.3",
     "kysely": "^0.29.5",

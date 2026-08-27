@@ -40,6 +40,60 @@
   --sidebar-w: 256px;
 
   --ease-standard: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /*
+   * PLAN.md T1: spacing scale. Previously no shared scale existed --
+   * every rule below hardcoded its own px value per-instance. This
+   * doesn't retroactively rewrite every existing hardcoded value (that
+   * would be a large, purely-cosmetic diff with no behavior change);
+   * it gives new/touched rules a real scale to reference instead of
+   * picking another ad-hoc number. Values chosen to match the spacing
+   * already in real use above (4/8/12/14/16/20/24px all appear as
+   * padding/gap/margin values in this file today).
+   */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 14px;
+  --space-5: 16px;
+  --space-6: 20px;
+  --space-7: 24px;
+
+  /*
+   * PLAN.md T1 (radii, same rationale): the four distinct radii already
+   * in use above (8/9/11/12px) plus the pill's 100px, given names so a
+   * new rule can reference "this is a pill" rather than "this happens
+   * to be 100px."
+   */
+  --radius-sm: 8px;
+  --radius-md: 9px;
+  --radius-lg: 11px;
+  --radius-xl: 12px;
+  --radius-pill: 100px;
+
+  /*
+   * PLAN.md T2: micro-text font-size scale. The 4 sizes already in use
+   * for small/label text (9-12px range: font-mono-label's 10px, pill's
+   * 10px, catalog-hero-stat-label's 12px, skill-card-footer's 11px)
+   * given an explicit small/xs/label relationship instead of 4
+   * independently-chosen numbers with no defined relationship to each
+   * other.
+   */
+  --text-2xs: 10px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+
+  /*
+   * PLAN.md T3: workspace terminal dark theme. Previously hardcoded as
+   * bare hex literals twice in the same file (WorkspaceTerminal.tsx's
+   * xterm `theme.background`/`theme.foreground` config object, and its
+   * container's `bg-[#0a0a0a]` Tailwind class) with no shared source --
+   * this app is otherwise strictly light-mode (see this file's own
+   * doc comment above), so these two values are the one deliberate
+   * exception, not a broader dark-theme system.
+   */
+  --workspace-bg: #0a0a0a;
+  --workspace-fg: #e5e5e5;
 }
 
 @theme inline {
@@ -428,6 +482,37 @@ h1, h2, h3, h4, .font-display {
 .lms-pill--warning { background: var(--warning-soft); color: var(--warning); }
 .lms-pill--danger { background: var(--danger-soft); color: var(--danger); }
 .lms-pill--muted { background: var(--inset); color: var(--ink-soft); }
+/* Matches the former .skill-card-badge--locked look exactly (Phase 4's
+   C1): transparent background with a border, for a badge that
+   represents an unavailable/inactive state rather than any of the 5
+   semantic accent/success/warning/danger/muted states above. */
+.lms-pill--outline { background: transparent; color: var(--ink-soft); border: 1px solid var(--border-strong); }
+/* Icon + label pills (skill-card-badge's live/locked badges) need a gap
+   between the icon and text that a text-only pill doesn't. */
+.lms-pill--with-icon { gap: 4px; }
+
+/* Workspace loading spinner -- provisioning/evaluating states on the
+   attempt page. Uses the existing border/accent tokens, no new colors. */
+.workspace-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2.5px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: workspace-spin 0.7s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-spinner {
+    animation: none;
+  }
+}
+
+@keyframes workspace-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 /* Inset field -- recessed surface for inputs/pills */
 .lms-inset-field {
@@ -546,29 +631,6 @@ h1, h2, h3, h4, .font-display {
   gap: 8px;
 }
 
-.skill-card-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 9px 3px 7px;
-  border-radius: 100px;
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.skill-card-badge--live {
-  background: var(--success-soft);
-  color: var(--success);
-}
-
-.skill-card-badge--locked {
-  background: transparent;
-  color: var(--ink-soft);
-  border: 1px solid var(--border-strong);
-}
 
 .skill-card-title {
   margin-top: 12px;

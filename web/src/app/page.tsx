@@ -3,20 +3,21 @@
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api-client';
-import { DEMO_TENANT_ID, DEMO_USER_ID } from '@/lib/demo-context';
-
-const BAND_COLOR: Record<string, string> = {
-  Novice: 'bg-[var(--ink-soft)]',
-  Developing: 'bg-[var(--warning)]',
-  Competent: 'bg-[var(--accent)]',
-  Proficient: 'bg-[var(--success)]',
-  Mastered: 'bg-[var(--success)]',
-};
+import { useSession } from '@/lib/session';
+import { Loader } from '@/components/ui/Loader';
+import { PageContainer } from '@/components/ui/PageContainer';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { ProgressBar } from '@/components/ui/ProgressBar';
+import { CardLink } from '@/components/ui/CardLink';
+import { SectionLabel } from '@/components/ui/SectionLabel';
+import { formatPercent, formatMode } from '@/lib/format';
+import { masteryBandFillClassName } from '@/lib/mastery';
+import { attemptRoute, catalogEntryRoute } from '@/lib/routes';
 
 const REASON_LABEL: Record<string, (params: Record<string, unknown>) => string> = {
   CURRICULUM_ADJACENT: (p) => `Related to ${p.topic ?? 'your current topic'}`,
   REMEDIATION: (p) =>
-    `Recommended because your mastery of this skill is ${p.mastery !== undefined ? `${(Number(p.mastery) * 100).toFixed(0)}%` : 'low'}`,
+    `Recommended because your mastery of this skill is ${p.mastery !== undefined ? formatPercent(Number(p.mastery)) : 'low'}`,
 };
 
 /**
@@ -27,53 +28,54 @@ const REASON_LABEL: Record<string, (params: Record<string, unknown>) => string> 
  * both have real data behind them.
  */
 export default function Home() {
+  const session = useSession();
   const { data, isLoading } = useQuery({
-    queryKey: ['dashboard', DEMO_USER_ID],
-    queryFn: () => api.getDashboard(DEMO_USER_ID, DEMO_TENANT_ID),
+    queryKey: ['dashboard', session?.userId],
+    queryFn: () => api.getDashboard(session!.userId, session!.tenantId),
+    enabled: !!session,
   });
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-12">
+    <PageContainer spacing="py-12">
       <h1 className="font-display text-2xl font-extrabold">Practice Engine</h1>
       <p className="mt-1 text-sm text-[var(--ink-muted)]">
         Learn → Follow → Implement → Troubleshoot → Design → Build → Defend
       </p>
 
-      {isLoading && <p className="mt-10 text-[var(--ink-muted)]">Loading…</p>}
+      {(isLoading || !session) && <Loader className="mt-10" label="Loading…" />}
 
       {data && (
         <div className="mt-10 space-y-8">
           {data.continueAttempt && (
             <section>
-              <h2 className="font-mono-label">Continue</h2>
-              <Link
-                href={`/attempts/${data.continueAttempt.id}`}
-                className="lms-card mt-2 block p-4 border-l-[3px] border-l-[var(--success)]"
+              <SectionLabel>Continue</SectionLabel>
+              <CardLink
+                variant="plain"
+                href={attemptRoute(data.continueAttempt.id)}
+                className="mt-2 border-l-[3px] border-l-[var(--success)]"
               >
                 <p className="text-sm text-[var(--ink)]">
-                  {data.continueAttempt.mode.replace('_', ' ')} — {data.continueAttempt.status}
+                  {formatMode(data.continueAttempt.mode)} — {data.continueAttempt.status}
                 </p>
-              </Link>
+              </CardLink>
             </section>
           )}
 
           <section>
-            <h2 className="font-mono-label">Recommended</h2>
+            <SectionLabel>Recommended</SectionLabel>
             {data.recommended.length === 0 ? (
-              <p className="mt-2 text-sm text-[var(--ink-soft)]">No recommendations yet — browse the catalog to get started.</p>
+              <EmptyState className="mt-2 text-sm text-[var(--ink-soft)]">
+                No recommendations yet — browse the catalog to get started.
+              </EmptyState>
             ) : (
               <div className="mt-2 space-y-2">
                 {data.recommended.map((rec) => (
-                  <Link
-                    key={rec.activityVersionId}
-                    href={`/catalog/${rec.activityVersionId}`}
-                    className="lms-card block p-4"
-                  >
+                  <CardLink key={rec.activityVersionId} variant="plain" href={catalogEntryRoute(rec.activityVersionId)}>
                     <p className="text-sm text-[var(--ink)]">{rec.slug}</p>
                     <p className="mt-1 text-xs text-[var(--ink-soft)]">
                       {(REASON_LABEL[rec.reasonCode] ?? (() => rec.reasonCode))(rec.reasonParams)}
                     </p>
-                  </Link>
+                  </CardLink>
                 ))}
               </div>
             )}
@@ -81,24 +83,24 @@ export default function Home() {
 
           <section>
             <div className="flex items-baseline justify-between">
-              <h2 className="font-mono-label">Mastery snapshot</h2>
+              <SectionLabel>Mastery snapshot</SectionLabel>
               <Link href="/skills" className="text-xs text-[var(--accent)] hover:text-[var(--accent-deep)]">
                 View all skills →
               </Link>
             </div>
             {data.masterySnapshot.length === 0 ? (
-              <p className="mt-2 text-sm text-[var(--ink-soft)]">No mastery evidence yet — complete an activity to see progress here.</p>
+              <EmptyState className="mt-2 text-sm text-[var(--ink-soft)]">
+                No mastery evidence yet — complete an activity to see progress here.
+              </EmptyState>
             ) : (
               <div className="mt-2 space-y-2">
                 {data.masterySnapshot.map((skill) => (
                   <div key={skill.skill_id} className="flex items-center gap-3 text-sm">
                     <span className="w-40 shrink-0 text-[var(--ink)]">{skill.name}</span>
-                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--inset)]">
-                      <div
-                        className={`h-full ${BAND_COLOR[skill.band] ?? 'bg-[var(--ink-soft)]'}`}
-                        style={{ width: `${Number(skill.p_mastery) * 100}%` }}
-                      />
-                    </div>
+                    <ProgressBar
+                      value={Number(skill.p_mastery)}
+                      fillClassName={masteryBandFillClassName(skill.band)}
+                    />
                     <span className="w-24 shrink-0 text-xs text-[var(--ink-soft)]">{skill.band}</span>
                   </div>
                 ))}
@@ -113,6 +115,6 @@ export default function Home() {
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

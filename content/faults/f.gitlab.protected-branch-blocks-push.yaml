@@ -1,5 +1,15 @@
+# Implemented against a real Gitea instance (fx.gitea-repo.v1) as a
+# documented, API-compatible substitute for GitLab -- same "real tool,
+# real mechanism, different vendor" precedent as fx.ansible-target.v1
+# standing in for a generic CI runner. Gitea's branch-protection API and
+# pre-receive-hook enforcement are a faithful analog of GitLab's
+# "protected branches" feature; the diagnostic path below still applies
+# conceptually (check the job log for a rejection, check the protection
+# rule, check the CI identity's access), though the exact real error
+# text is Gitea's own ("Not allowed to push to protected branch
+# <branch>"), not GitLab's literal wording -- live-verified this session.
 id: f.gitlab.protected-branch-blocks-push
-version: 1
+version: 2
 title: CI job fails to push a generated commit because of branch protection
 summary: A pipeline stage that auto-commits (e.g. version bump) fails because the target branch's protection rules block the CI token's push.
 
@@ -8,8 +18,8 @@ symptom_class: PushRejected
 skills_probed: [gitlab.cicd-pipelines, cicd.troubleshooting]
 
 canonical_diagnostic_path:
-  - "check pipeline job log → see 'You are not allowed to push code to protected branches'"
-  - "check Settings > Repository > Protected Branches → confirm which roles can push"
+  - "check pipeline job log → see a real push-rejected error from the git server referencing the protected branch"
+  - "check the repo's branch protection settings → confirm which roles/users can push"
   - "check the CI token/service account's role against that rule"
 
 expected_fix_class: [grant_push_exception, use_merge_request_flow_instead]
@@ -23,3 +33,4 @@ params_schema:
 
 reversible: true
 min_tier: T1_SHARED_CONTAINER
+handler_implemented: true

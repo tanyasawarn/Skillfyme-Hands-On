@@ -4,16 +4,14 @@ import { Suspense } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { DEFAULT_COURSE_SLUG } from '@/lib/demo-context';
+import { COURSES } from '@/lib/courses';
+import { COURSE_QUERY_PARAM } from '@/lib/route-params';
+import { SectionLabel } from '@/components/ui/SectionLabel';
 
 const NAV_ITEMS = [
   { href: '/catalog', label: 'Catalog' },
   { href: '/skills', label: 'Skills' },
   { href: '/history', label: 'History' },
-];
-
-const COURSES = [
-  { slug: 'devops-with-ai', label: 'DevOps With AI' },
-  { slug: 'genai-with-ml', label: 'Generative AI With ML' },
 ];
 
 /**
@@ -41,7 +39,7 @@ export function Sidebar() {
  * same as before) rather than introducing separate app state.
  */
 function CourseAwareSidebar() {
-  const course = useSearchParams().get('course');
+  const course = useSearchParams().get(COURSE_QUERY_PARAM);
   return <SidebarContent course={course} />;
 }
 
@@ -49,18 +47,18 @@ function SidebarContent({ course }: { course: string | null }) {
   const router = useRouter();
   const pathname = usePathname();
   const activeCourse = course ?? DEFAULT_COURSE_SLUG;
-  const suffix = course ? `?course=${encodeURIComponent(course)}` : '';
+  const suffix = course ? `?${COURSE_QUERY_PARAM}=${encodeURIComponent(course)}` : '';
 
   function handleCourseChange(nextSlug: string) {
-    router.push(`${pathname}?course=${encodeURIComponent(nextSlug)}`);
+    router.push(`${pathname}?${COURSE_QUERY_PARAM}=${encodeURIComponent(nextSlug)}`);
   }
 
   return (
     <>
       <div className="sidebar-course-switcher">
-        <label htmlFor="course-switcher" className="font-mono-label">
+        <SectionLabel as="label" htmlFor="course-switcher">
           Course
-        </label>
+        </SectionLabel>
         <select
           id="course-switcher"
           className="course-select"

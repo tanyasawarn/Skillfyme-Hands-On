@@ -1,30 +1,22 @@
 'use client';
 
-import { Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api-client';
-import { DEFAULT_COURSE_SLUG, DEMO_USER_ID } from '@/lib/demo-context';
-
-const BAND_COLOR: Record<string, string> = {
-  Novice: 'lms-pill--muted',
-  Developing: 'lms-pill--warning',
-  Competent: 'lms-pill--accent',
-  Proficient: 'lms-pill--success',
-  Mastered: 'lms-pill--success',
-};
-
-const COURSE_TITLE: Record<string, string> = {
-  'devops-with-ai': 'DevOps With AI',
-  'genai-with-ml': 'Generative AI With ML',
-};
+import { DEFAULT_COURSE_SLUG } from '@/lib/demo-context';
+import { useSession } from '@/lib/session';
+import { Loader } from '@/components/ui/Loader';
+import { Badge } from '@/components/ui/Badge';
+import { PageContainer } from '@/components/ui/PageContainer';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { WithSearchParamsSuspense } from '@/components/ui/WithSearchParamsSuspense';
+import { formatPercent } from '@/lib/format';
+import { courseLabel } from '@/lib/courses';
+import { COURSE_QUERY_PARAM } from '@/lib/route-params';
+import { masteryBandVariant } from '@/lib/mastery';
 
 export default function SkillsPage() {
-  return (
-    <Suspense fallback={<div className="mx-auto max-w-3xl px-6 py-10 text-[var(--ink-muted)]">Loading…</div>}>
-      <SkillsPageInner />
-    </Suspense>
-  );
+  return <WithSearchParamsSuspense Component={SkillsPageInner} loadingLabel="Loading…" />;
 }
 
 /**
@@ -42,27 +34,29 @@ export default function SkillsPage() {
  */
 function SkillsPageInner() {
   const searchParams = useSearchParams();
-  const courseSlug = searchParams.get('course') ?? DEFAULT_COURSE_SLUG;
-  const courseTitle = COURSE_TITLE[courseSlug] ?? courseSlug;
+  const courseSlug = searchParams.get(COURSE_QUERY_PARAM) ?? DEFAULT_COURSE_SLUG;
+  const courseTitle = courseLabel(courseSlug);
 
+  const session = useSession();
   const { data, isLoading } = useQuery({
-    queryKey: ['skills', DEMO_USER_ID, courseSlug],
-    queryFn: () => api.getSkills(DEMO_USER_ID, courseSlug),
+    queryKey: ['skills', session?.userId, courseSlug],
+    queryFn: () => api.getSkills(session!.userId, courseSlug),
+    enabled: !!session,
   });
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10">
+    <PageContainer spacing="py-10">
       <h1 className="font-display text-2xl font-extrabold">{courseTitle} — Skills</h1>
       <p className="mt-1 text-sm text-[var(--ink-muted)]">
         Doc §2.4: mastery bands and evidence counts, not raw probabilities.
       </p>
 
-      {isLoading && <p className="mt-8 text-[var(--ink-muted)]">Loading…</p>}
+      {(isLoading || !session) && <Loader label="Loading…" />}
 
       {data && data.length === 0 && (
-        <p className="mt-8 text-[var(--ink-soft)]">
+        <EmptyState>
           No mastery evidence yet — complete a lab to start building your skill profile.
-        </p>
+        </EmptyState>
       )}
 
       {data && data.length > 0 && (
@@ -77,14 +71,14 @@ function SkillsPageInner() {
               </div>
               <div className="flex items-center gap-3">
                 <span className="font-mono text-xs text-[var(--ink-soft)]">
-                  {(Number(skill.p_mastery) * 100).toFixed(0)}%
+                  {formatPercent(Number(skill.p_mastery))}
                 </span>
-                <span className={`lms-pill ${BAND_COLOR[skill.band]}`}>{skill.band}</span>
+                <Badge variant={masteryBandVariant(skill.band)}>{skill.band}</Badge>
               </div>
             </li>
           ))}
         </ul>
       )}
-    </div>
+    </PageContainer>
   );
 }

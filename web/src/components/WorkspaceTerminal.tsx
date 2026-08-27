@@ -6,6 +6,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { api } from '@/lib/api-client';
+import { WORKSPACE_BG, WORKSPACE_FG } from '@/lib/workspace-theme';
 
 type ConnectionState = 'connecting' | 'open' | 'reconnecting' | 'closed';
 
@@ -48,13 +49,15 @@ export function WorkspaceTerminal({ attemptId }: { attemptId: string }) {
       cursorBlink: true,
       fontSize: 13,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-      theme: { background: '#0a0a0a', foreground: '#e5e5e5' },
+      theme: { background: WORKSPACE_BG, foreground: WORKSPACE_FG },
       scrollback: 5000,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     termRef.current = term;
     fitRef.current = fit;
+
+    const focusTerm = () => term.focus();
 
     if (containerRef.current) {
       term.open(containerRef.current);
@@ -67,6 +70,12 @@ export function WorkspaceTerminal({ attemptId }: { attemptId: string }) {
         // canvas renderer remains active -- fine, just slower on huge scrollback.
       }
       fit.fit();
+      // xterm only captures keystrokes when its internal hidden textarea
+      // has DOM focus -- term.open() alone doesn't focus it, so without
+      // this the cursor blinks but every keypress is silently swallowed
+      // by the page instead of reaching the PTY.
+      term.focus();
+      containerRef.current.addEventListener('mousedown', focusTerm);
     }
 
     const resizeObserver = new ResizeObserver(() => {
@@ -91,6 +100,7 @@ export function WorkspaceTerminal({ attemptId }: { attemptId: string }) {
       unmountedRef.current = true;
       attemptRef.current += 1; // invalidate any in-flight connect()/reconnect chain
       resizeObserver.disconnect();
+      containerRef.current?.removeEventListener('mousedown', focusTerm);
       onData.dispose();
       wsRef.current?.close();
       term.dispose();
@@ -156,7 +166,7 @@ export function WorkspaceTerminal({ attemptId }: { attemptId: string }) {
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-xl border border-[var(--border)]">
       <ConnectionBanner state={state} reconnectCount={reconnectCount} error={error} />
-      <div ref={containerRef} className="min-h-0 flex-1 bg-[#0a0a0a] p-2" />
+      <div ref={containerRef} className="min-h-0 flex-1 bg-[var(--workspace-bg)] p-2" />
     </div>
   );
 }

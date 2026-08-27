@@ -8,3 +8,8 @@ build/
 .local/
 coverage/
 *.tsbuildinfo
+certs/
+
+# Compiled Go binary (built via `go build -o orchestrator ./cmd/orchestrator`;
+# CI/runners build it fresh -- see scripts/ci/bootstrap-content-ci-runner.sh)
+/orchestrator/orchestrator

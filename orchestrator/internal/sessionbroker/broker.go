@@ -24,6 +24,8 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+
+	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/k8s"
 )
 
 // CommandEvent is what the broker emits per detected command -- doc §4.2
@@ -95,10 +97,10 @@ func (b *Broker) installHook(ctx context.Context, ns string) error {
 	req := b.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Namespace(ns).
-		Name("workspace").
+		Name(k8s.WorkspacePodName).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
-			Container: "shell",
+			Container: k8s.WorkspaceContainerName,
 			Command:   []string{"/bin/sh", "-c", fmt.Sprintf("cat > %s", hookFilePath)},
 			Stdin:     true,
 			Stdout:    true,

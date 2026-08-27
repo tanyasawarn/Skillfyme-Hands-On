@@ -1,0 +1,29 @@
+# Code owners.
+#
+# GitHub requires the last matching pattern to win, so order matters:
+# most-specific rules go last.
+#
+# For "Require review from Code Owners" to actually block a merge, enable
+# it in Settings -> Branches -> branch protection for `main`. See
+# contracts/README.md.
+
+# --- The frozen cross-track contract -------------------------------------
+# Any change here breaks the other service track silently if unreviewed.
+# PLAN.md: contract changes need BOTH track owners' approval, plus a
+# green `contracts` CI job (buf lint + buf breaking + stub freshness) and
+# a CHANGELOG.md entry in the same PR.
+#
+# TODO(operator): replace the placeholders with the real Dev A / Dev B
+# GitHub handles (or teams, e.g. @org/dev-a @org/dev-b).
+/contracts/                         @dev-a-placeholder @dev-b-placeholder
+/orchestrator/pkg/pb/               @dev-a-placeholder @dev-b-placeholder
+
+# --- Service ownership (informational; single-owner, not dual-review) ---
+# Matches D6 / PLAN.md's two-developer split. Not dual-review gated --
+# these are here so PRs auto-request the right reviewer, not to block.
+/orchestrator/                      @dev-a-placeholder
+/practice-core/                     @dev-b-placeholder
+/evaluation/                        @dev-b-placeholder
+/ai-gateway/                        @dev-b-placeholder
+/web/                               @dev-b-placeholder
+/content/                           @dev-b-placeholder

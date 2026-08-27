@@ -1,0 +1,25 @@
+# Deterministic Go codegen for the orchestrator contract.
+#
+# Uses buf's version-pinned remote plugins so the output depends only on
+# this file + orchestrator.proto -- not on whatever protoc/protoc-gen-go
+# happens to be on a given machine. That determinism is what makes the
+# "regenerate and git diff --exit-code" freshness check in
+# .github/workflows/ci.yml reliable.
+#
+# Run from the repo root:  (cd contracts && buf generate)
+#
+# The TypeScript side generates nothing: practice-core loads the .proto
+# at runtime via @grpc/proto-loader (practice-core/src/common/base-grpc-client.ts),
+# so the .proto file itself is the only artifact it consumes.
+version: v2
+managed:
+  enabled: true
+plugins:
+  - remote: buf.build/protocolbuffers/go:v1.36.12
+    out: ../orchestrator/pkg/pb
+    opt:
+      - paths=source_relative
+  - remote: buf.build/grpc/go:v1.6.2
+    out: ../orchestrator/pkg/pb
+    opt:
+      - paths=source_relative

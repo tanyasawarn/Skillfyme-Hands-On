@@ -1,11 +1,22 @@
 'use client';
 
-import { Suspense, useMemo } from 'react';
+import { useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import Link from 'next/link';
 import { api, type SkillCatalogEntry } from '@/lib/api-client';
-import { DEFAULT_COURSE_SLUG, DEMO_TENANT_ID } from '@/lib/demo-context';
+import { DEFAULT_COURSE_SLUG } from '@/lib/demo-context';
+import { useSession } from '@/lib/session';
+import { courseLabel } from '@/lib/courses';
+import { COURSE_QUERY_PARAM } from '@/lib/route-params';
+import { Badge } from '@/components/ui/Badge';
+import { PageContainer } from '@/components/ui/PageContainer';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { CardLink } from '@/components/ui/CardLink';
+import { QueryBoundary } from '@/components/ui/QueryBoundary';
+import { WithSearchParamsSuspense } from '@/components/ui/WithSearchParamsSuspense';
+import { catalogEntryRoute } from '@/lib/routes';
+import { SectionLabel } from '@/components/ui/SectionLabel';
+import { formatCurrency } from '@/lib/format';
 
 const DIFFICULTY_LABEL: Record<string, string> = {
   L1: 'L1 · Guided',
@@ -13,11 +24,6 @@ const DIFFICULTY_LABEL: Record<string, string> = {
   L3: 'L3 · Independent',
   L4: 'L4 · Production',
   L5: 'L5 · Expert',
-};
-
-const COURSE_TITLE: Record<string, string> = {
-  'devops-with-ai': 'DevOps With AI',
-  'genai-with-ml': 'Generative AI With ML',
 };
 
 // Domain labels are keyed per-course since each course's domain slugs
@@ -117,9 +123,7 @@ function DomainIcon({ domain }: { domain: string }) {
  */
 export default function CatalogPage() {
   return (
-    <Suspense fallback={<div className="mx-auto max-w-6xl px-6 py-10 text-[var(--ink-muted)]">Loading catalog…</div>}>
-      <CatalogPageInner />
-    </Suspense>
+    <WithSearchParamsSuspense Component={CatalogPageInner} loadingLabel="Loading catalog…" maxWidth="6xl" />
   );
 }
 
@@ -135,13 +139,15 @@ function CatalogPageInner() {
   // DevOps track when absent, so local dev / any caller not yet updated
   // to pass it keeps working.
   const searchParams = useSearchParams();
-  const courseSlug = searchParams.get('course') ?? DEFAULT_COURSE_SLUG;
-  const courseTitle = COURSE_TITLE[courseSlug] ?? courseSlug;
+  const courseSlug = searchParams.get(COURSE_QUERY_PARAM) ?? DEFAULT_COURSE_SLUG;
+  const courseTitle = courseLabel(courseSlug);
   const domainLabels = DOMAIN_LABEL[courseSlug] ?? {};
 
+  const session = useSession();
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['skill-catalog', DEMO_TENANT_ID, courseSlug],
-    queryFn: () => api.listSkillCatalog(DEMO_TENANT_ID, courseSlug),
+    queryKey: ['skill-catalog', session?.tenantId, courseSlug],
+    queryFn: () => api.listSkillCatalog(session!.tenantId, courseSlug),
+    enabled: !!session,
   });
 
   const domains = useMemo(() => {
@@ -162,7 +168,7 @@ function CatalogPageInner() {
   const availableCount = data?.filter((e) => e.activity_id).length ?? 0;
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-10">
+    <PageContainer maxWidth="6xl" spacing="py-10">
       <div className="catalog-hero">
         <div>
           <h1 className="font-display text-2xl font-extrabold">{courseTitle} — Practice Catalog</h1>
@@ -179,20 +185,11 @@ function CatalogPageInner() {
         )}
       </div>
 
-      {isLoading && <p className="mt-8 text-[var(--ink-muted)]">Loading catalog…</p>}
-
-      {isError && (
-        <div className="mt-8 rounded-md border border-[var(--danger)] bg-[var(--danger-soft)] p-4 text-sm text-[var(--danger)]">
-          Could not reach practice-core at {process.env.NEXT_PUBLIC_API_BASE_URL}. Is it running
-          (`npm run start:dev` in /practice-core)?
-          <pre className="mt-2 whitespace-pre-wrap text-xs opacity-70">{String(error)}</pre>
-        </div>
-      )}
-
+      <QueryBoundary isLoading={isLoading || !session} isError={isError} error={error} loadingLabel="Loading catalog…">
       {data && data.length === 0 && (
-        <p className="mt-8 text-[var(--ink-soft)]">
+        <EmptyState>
           No skills loaded yet. Run scripts/seed-skills.ts to load the curriculum skill graph.
-        </p>
+        </EmptyState>
       )}
 
       {data && data.length > 0 && (
@@ -209,10 +206,10 @@ function CatalogPageInner() {
                     <h2 className="font-display text-base font-bold text-[var(--ink)]">
                       {domainLabels[domain] ?? domain}
                     </h2>
-                    <p className="font-mono-label mt-0.5">
+                    <SectionLabel as="p" className="mt-0.5">
                       {domainAvailable > 0 ? `${domainAvailable} lab${domainAvailable > 1 ? 's' : ''} live · ` : ''}
                       {skills.length} skills
-                    </p>
+                    </SectionLabel>
                   </div>
                 </div>
                 <div className="skill-grid">
@@ -225,7 +222,8 @@ function CatalogPageInner() {
           })}
         </div>
       )}
-    </div>
+      </QueryBoundary>
+    </PageContainer>
   );
 }
 
@@ -235,21 +233,25 @@ function SkillCard({ entry }: { entry: SkillCatalogEntry }) {
   const body = (
     <>
       <div className="skill-card-top">
-        <span className={`skill-card-badge ${available ? 'skill-card-badge--live' : 'skill-card-badge--locked'}`}>
-          {available ? (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="13" height="13">
-              <path d="M5 12l5 5L20 7" />
-            </svg>
-          ) : (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="13" height="13">
-              <rect x="5" y="11" width="14" height="9" rx="2" />
-              <path d="M8 11V8a4 4 0 0 1 8 0v3" />
-            </svg>
-          )}
+        <Badge
+          variant={available ? 'success' : 'outline'}
+          icon={
+            available ? (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="13" height="13">
+                <path d="M5 12l5 5L20 7" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="13" height="13">
+                <rect x="5" y="11" width="14" height="9" rx="2" />
+                <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+              </svg>
+            )
+          }
+        >
           {available ? 'Live' : 'Locked'}
-        </span>
+        </Badge>
         {available && entry.difficulty_level && (
-          <span className="lms-pill lms-pill--accent">{DIFFICULTY_LABEL[entry.difficulty_level]}</span>
+          <Badge variant="accent">{DIFFICULTY_LABEL[entry.difficulty_level]}</Badge>
         )}
       </div>
 
@@ -265,7 +267,7 @@ function SkillCard({ entry }: { entry: SkillCatalogEntry }) {
         <div className="skill-card-footer">
           <span>
             {entry.estimated_minutes ? `~${entry.estimated_minutes} min` : ''}
-            {entry.cost_budget_usd ? ` · $${Number(entry.cost_budget_usd).toFixed(2)}` : ''}
+            {entry.cost_budget_usd ? ` · ${formatCurrency(Number(entry.cost_budget_usd))}` : ''}
           </span>
           <span className="skill-card-cta">
             Start
@@ -278,13 +280,13 @@ function SkillCard({ entry }: { entry: SkillCatalogEntry }) {
     </>
   );
 
-  if (!available) {
-    return <div className="skill-card skill-card--locked">{body}</div>;
-  }
-
   return (
-    <Link href={`/catalog/${entry.activity_version_id}`} className="skill-card skill-card--live">
+    <CardLink
+      variant="lift"
+      href={available && entry.activity_version_id ? catalogEntryRoute(entry.activity_version_id) : '#'}
+      disabled={!available}
+    >
       {body}
-    </Link>
+    </CardLink>
   );
 }

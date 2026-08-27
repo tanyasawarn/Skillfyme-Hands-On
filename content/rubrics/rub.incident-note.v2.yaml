@@ -1,0 +1,100 @@
+# Doc §6.5 rule 31: "Rubric-anchored, level-based. Each criterion has 4-5
+# levels with concrete descriptors and, critically, 2-3 exemplar
+# submissions per level stored with the rubric. Exemplars go in the
+# prompt. This is the difference between usable and useless AI grading."
+#
+# Doc §1.3.2 step 9: "Required artifact: root cause, detection, timeline,
+# remediation, prevention. Graded by AI against rub.incident-note.v2 --
+# with the deterministic facts (which fault was actually present, what
+# the learner actually did) supplied to the grader, so it can judge
+# whether the stated root cause is CORRECT, not just well-written."
+#
+# Phase 2 scope: this file is the real, versioned rubric content (levels,
+# descriptors, exemplars) -- the grader that reads it (AiGrader,
+# practice-core/src/modules/evaluation/) is stubbed pending a real LLM
+# provider key (see FakeAiGrader's own doc comment for exactly what's
+# stubbed and why).
+id: rub.incident-note.v2
+version: 2
+artifact_type: MARKDOWN
+required_sections:
+  - root_cause
+  - detection
+  - timeline
+  - remediation
+  - prevention
+
+criteria:
+  - key: root_cause_accuracy
+    title: Root cause accuracy
+    description: >
+      Does the stated root cause match the fault the platform actually
+      injected? This is graded against deterministic ground truth (the
+      fault_id and its content-authored description), not just
+      "does this sound plausible" -- doc §1.3.2 step 9's core move.
+    levels:
+      - level: 1
+        descriptor: "No root cause stated, or root cause is unrelated to the actual injected fault."
+      - level: 2
+        descriptor: "Root cause names the right general area (e.g. 'a resource limit') but misidentifies the specific mechanism."
+      - level: 3
+        descriptor: "Root cause correctly identifies the mechanism but the explanation of why it caused the symptom is incomplete or partially wrong."
+      - level: 4
+        descriptor: "Root cause is correct and the causal chain from misconfiguration to observed symptom is clearly and accurately explained."
+    exemplars:
+      - level: 1
+        text: "The service was down. I restarted it and it came back up."
+      - level: 4
+        text: >
+          Root cause: the checkout Deployment's memory limit was set to
+          96Mi, well below the container's actual working-set size under
+          normal load (~180Mi observed via `kubectl top pod`). This
+          caused the kernel OOM killer to repeatedly terminate the
+          process once memory usage crossed the limit, which
+          Kubernetes surfaced as recurring OOMKilled restarts
+          (confirmed via `kubectl describe pod`, Last State: OOMKilled).
+
+  - key: completeness
+    title: Completeness of required sections
+    description: >
+      Are all five required sections (root_cause, detection, timeline,
+      remediation, prevention) present and substantive, not just
+      present-but-empty placeholders?
+    levels:
+      - level: 1
+        descriptor: "Two or fewer required sections present."
+      - level: 2
+        descriptor: "Three or four required sections present; at least one is a placeholder with no real content."
+      - level: 3
+        descriptor: "All five sections present with real content, but one or two are thin (a single sentence with no supporting detail)."
+      - level: 4
+        descriptor: "All five sections present, each with concrete, specific supporting detail (not generic statements that could apply to any incident)."
+
+  - key: prevention_quality
+    title: Prevention recommendation quality
+    description: >
+      Does the prevention section propose a concrete, actionable change
+      (a specific alert, a specific resource-limit review process, a
+      specific CI check) rather than a generic platitude ("be more
+      careful", "add more monitoring")?
+    levels:
+      - level: 1
+        descriptor: "No prevention section, or a pure platitude with no concrete action."
+      - level: 2
+        descriptor: "Names a general category of improvement (e.g. 'better alerting') without a specific, actionable proposal."
+      - level: 3
+        descriptor: "Proposes a specific, actionable change directly tied to the actual root cause."
+      - level: 4
+        descriptor: "Proposes a specific, actionable change AND explains how it would have caught or prevented this exact incident earlier."
+
+human_review:
+  # Doc §6.5 rule 37: "100% human review for certification-bearing final
+  # project scores; ~10% random audit otherwise; 100% review for appeals
+  # and for any submission where AI confidence is low or flags fired."
+  # Phase 2 scope has no calibration harness (rule 36) run against this
+  # rubric yet -- per rule 33's own fallback ("if you cannot afford the
+  # calibration work for a given rubric, make that criterion
+  # advisory-only... until you can"), every score from this rubric is
+  # provisional and 100% human-reviewed until a calibration pass exists,
+  # not just the doc's steady-state ~10% audit rate.
+  policy: ALWAYS_PROVISIONAL_UNTIL_CALIBRATED

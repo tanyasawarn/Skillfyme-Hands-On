@@ -11,6 +11,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
+
+	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/k8s"
 )
 
 // reconnectGrace is how long a PTY session survives after its WebSocket
@@ -225,10 +227,10 @@ func (b *Broker) startSession(parentCtx context.Context, attemptID, envID string
 	req := b.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Namespace(ns).
-		Name("workspace").
+		Name(k8s.WorkspacePodName).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
-			Container: "shell",
+			Container: k8s.WorkspaceContainerName,
 			Command:   []string{"/bin/bash", "--rcfile", hookFilePath, "-i"},
 			Stdin:     true,
 			Stdout:    true,

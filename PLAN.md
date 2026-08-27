@@ -48,8 +48,8 @@ everything after.
 | 2 | `contracts/events.md` + JSON Schema for `attempt_events.payload` | Full taxonomy from §4.2 |
 | 3 | `contracts/activity_spec.schema.json` | From §3.2 YAML shape, JSON-Schema'd for CI lint |
 | 4 | Postgres schema skeleton, schema-per-bounded-context (`content`, `learner`, `attempt`, `skill`, `env`, `billing`, `admin`) | §8.4 — created empty, each dev migrates their own schemas after |
-| 5 | Repo layout: `/practice-core`, `/orchestrator`, `/evaluation`, `/ai-gateway`, `/content`, `/web`, `/contracts` | Mirrors D6 service boundaries 1:1 |
-| 6 | CI skeleton: lint + build per service, no deploy yet | |
+| 5 | Repo layout: `/practice-core`, `/orchestrator`, `/evaluation`, `/ai-gateway`, `/content`, `/web`, `/contracts` | Mirrors D6 service boundaries 1:1. **As built:** `/orchestrator` is a real separate service; `/evaluation` is a deliberately-bounded module inside `/practice-core` (transactional coupling — see `evaluation/README.md`, boundary enforced by `practice-core/eslint.boundaries.mjs`); `/ai-gateway` is not built (Phase 4 scope — see `ai-gateway/README.md`). |
+| 6 | CI skeleton: lint + build per service, no deploy yet. **As built:** also a `contracts` job (`buf lint` + `buf breaking` + stub-freshness) and a self-hosted `content-ci` job (nightly + per-PR) — see `.github/workflows/`. | |
 | 7 | Local dev environment: docker-compose with Postgres, Redis, NATS, a single-node k3s (for Dev A's early T1 work) | |
 
 **Exit criteria:** both devs can run `docker-compose up` and hit a stub gRPC call end-to-end (Practice Core →
@@ -146,9 +146,11 @@ time-to-ready p95 ≤20s; validator ERROR rate <0.5%; cost/attempt <$0.08; measu
 - `blast_radius` forbidden commands are detected in Dev A's Session Broker tap but scored by Dev B's scoring
   engine — same event-based handoff as Phase 1's `COMMAND_EXECUTED`, no new mechanism needed.
 
-**Dependency note:** Dev A should not start T2 until Phase 1's reaper/teardown has been running with zero
-orphans for a sustained period (doc's own R1/R9 risk gates) — this is a real sequencing dependency, not just
-advisory.
+**Dependency note:** The doc's explicit zero-orphan gate is stated for T3 (§13.1 Phase 3), not T2. It is
+applied here to T2 as well because the same teardown-discipline and namespace-churn risks (R1, and R9's
+"load test namespace churn at 3× projected peak before Phase 3") already bite at the T2 microVM tier — Dev A
+should not start T2 until Phase 1's reaper/teardown has run with zero orphans for a sustained period. This is
+a plan-level sequencing decision derived from the doc's risk register, not a verbatim doc requirement.
 
 ---
 
@@ -205,7 +207,7 @@ retrieve" — so this genuinely depends on Phase 1–3 being solid, not just seq
 - Mentor Service: policy resolution, intent classification, context assembly, output guardrails (§7.2–7.5)
 - Persona/disclosure-ceiling policy engine per mode (§7.3)
 - Hint escalation contract incl. "just tell me" guided-fallback path, assisted-flag propagation to BKT (§7.5)
-- Prompt versioning + adversarial CI suite (solution-leakage tests) (§6.5 step 8, §7.7)
+- Prompt versioning + adversarial CI suite (solution-leakage tests) (§3.5 step 8, §7.7)
 - Full four-stage recommender: candidate gen (all 5 sources) → eligibility → weighted scoring → re-rank/package
   with reason codes (§2.5)
 - Spaced repetition scheduling (§2.4 review-due, §2.5 f5)

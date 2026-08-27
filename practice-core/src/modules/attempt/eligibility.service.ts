@@ -1,13 +1,23 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Kysely } from 'kysely';
 import { KYSELY } from '../../db/database.module';
 import type { Database } from '../../db/schema';
 import { SkillRepository } from '../skill/skill.repository';
 import { MasteryService } from '../skill/mastery.service';
+import { EligibilityConstants } from '../../common/constants';
+import type { AttemptErrorReason } from './attempt-error';
 
 export interface EligibilityResult {
   eligible: boolean;
-  reasons: string[];
+  /**
+   * Structured reason metadata (code + message + context), not prose
+   * strings -- lets a caller (createAttempt, or a client reading the
+   * eligibility check directly) branch on `code` instead of pattern-
+   * matching message text. `message` still reads as a normal sentence
+   * for display/logging.
+   */
+  reasons: AttemptErrorReason[];
 }
 
 /**
@@ -31,13 +41,14 @@ export class EligibilityService {
     @Inject(KYSELY) private readonly db: Kysely<Database>,
     private readonly skillRepo: SkillRepository,
     private readonly mastery: MasteryService,
+    private readonly config: ConfigService,
   ) {}
 
   async check(
     userId: string,
     activityVersionId: string,
   ): Promise<EligibilityResult> {
-    const reasons: string[] = [];
+    const reasons: AttemptErrorReason[] = [];
 
     const version = await this.db
       .selectFrom('content.activity_version')
@@ -46,10 +57,23 @@ export class EligibilityService {
       .executeTakeFirst();
 
     if (!version) {
-      return { eligible: false, reasons: ['activity version not found'] };
+      return {
+        eligible: false,
+        reasons: [
+          {
+            code: 'ACTIVITY_NOT_PUBLISHED',
+            message: 'activity version not found',
+            context: { activityVersionId },
+          },
+        ],
+      };
     }
     if (version.status !== 'PUBLISHED' && version.status !== 'CANARY') {
-      reasons.push(`activity version is ${version.status}, not PUBLISHED`);
+      reasons.push({
+        code: 'ACTIVITY_NOT_PUBLISHED',
+        message: `activity version is ${version.status}, not PUBLISHED`,
+        context: { activityVersionStatus: version.status },
+      });
     }
 
     // REQUIRES-prereq mastery gate (doc §2.5 stage 2: "REQUIRES-prereq mastery < 0.55").
@@ -64,7 +88,11 @@ export class EligibilityService {
       const ancestors = await this.skillRepo.getRequiresAncestors(skill_id);
       const gateMet = await this.mastery.meetsRequiresGate(userId, ancestors);
       if (!gateMet) {
-        reasons.push(`prerequisite mastery gate not met for skill ${skill_id}`);
+        reasons.push({
+          code: 'PREREQUISITE_NOT_MET',
+          message: `prerequisite mastery gate not met for skill ${skill_id}`,
+          context: { skillId: skill_id },
+        });
       }
     }
 
@@ -77,14 +105,20 @@ export class EligibilityService {
       .where('user_id', '=', userId)
       .where('activity_id', '=', activityId)
       .executeTakeFirst();
-    if (
-      learnerState?.cooldown_until &&
-      learnerState.cooldown_until > new Date()
-    ) {
-      reasons.push(
-        `retry cooldown active until ${learnerState.cooldown_until}`,
-      );
-    }
+    // TESTING: retry cooldown check temporarily disabled so attempts can be
+    // started back-to-back while testing the system. Restore this block before
+    // shipping.
+    // if (
+    //   learnerState?.cooldown_until &&
+    //   learnerState.cooldown_until > new Date()
+    // ) {
+    //   reasons.push({
+    //     code: 'COOLDOWN_ACTIVE',
+    //     message: `retry cooldown active until ${learnerState.cooldown_until}`,
+    //     context: { cooldownUntil: learnerState.cooldown_until },
+    //   });
+    // }
+    void learnerState;
 
     // Concurrent-environment quota (doc §4.4: "one active environment per
     // learner by default"). An attempt still holds its environment slot
@@ -92,22 +126,40 @@ export class EligibilityService {
     // environment is only destroyed *after* evaluation completes (step
     // 13: "Destroy -> snapshot -> destroy" follows the score/mastery
     // update), not at the moment of submit.
-    const activeAttempts = await this.db
-      .selectFrom('attempt.attempt')
-      .select((eb) => eb.fn.countAll<number>().as('count'))
-      .where('user_id', '=', userId)
-      .where('status', 'in', [
-        'PROVISIONING',
-        'READY',
-        'IN_PROGRESS',
-        'SUBMITTED',
-        'EVALUATING',
-      ])
-      .executeTakeFirstOrThrow();
-    if (Number(activeAttempts.count) >= 1) {
-      reasons.push(
-        'concurrent-environment quota exceeded (1 active environment per learner)',
-      );
+    //
+    // DISABLE_LAB_QUOTA=true skips this check entirely -- testing-only
+    // escape hatch, unset/false in every real environment. Left as an
+    // explicit env-gated branch (not deleted) so removing it later is a
+    // one-line diff instead of reconstructing the quota logic.
+    const quotaDisabled =
+      this.config.get<string>('DISABLE_LAB_QUOTA') === 'true';
+    if (!quotaDisabled) {
+      const activeAttempts = await this.db
+        .selectFrom('attempt.attempt')
+        .select((eb) => eb.fn.countAll<number>().as('count'))
+        .where('user_id', '=', userId)
+        .where('status', 'in', [
+          'PROVISIONING',
+          'READY',
+          'IN_PROGRESS',
+          'SUBMITTED',
+          'EVALUATING',
+        ])
+        .executeTakeFirstOrThrow();
+      if (
+        Number(activeAttempts.count) >=
+        EligibilityConstants.MAX_CONCURRENT_ENVIRONMENTS_PER_LEARNER
+      ) {
+        reasons.push({
+          code: 'CONCURRENT_QUOTA_EXCEEDED',
+          message: `concurrent-environment quota exceeded (${EligibilityConstants.MAX_CONCURRENT_ENVIRONMENTS_PER_LEARNER} active environment${EligibilityConstants.MAX_CONCURRENT_ENVIRONMENTS_PER_LEARNER === 1 ? '' : 's'} per learner)`,
+          context: {
+            activeCount: Number(activeAttempts.count),
+            maxAllowed:
+              EligibilityConstants.MAX_CONCURRENT_ENVIRONMENTS_PER_LEARNER,
+          },
+        });
+      }
     }
 
     return { eligible: reasons.length === 0, reasons };

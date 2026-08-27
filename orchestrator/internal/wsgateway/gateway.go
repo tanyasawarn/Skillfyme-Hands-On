@@ -21,6 +21,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
 	"golang.org/x/time/rate"
+
+	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/metrics"
+	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/ttl"
 )
 
 // SessionValidator checks that a session_token (minted by
@@ -134,6 +137,15 @@ func (g *Gateway) HandleTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	// doc §5.4: the client reconnect loop
+	// (web/src/components/WorkspaceTerminal.tsx) opens a fresh socket
+	// with a new session token on every drop, so a rising connection
+	// count relative to distinct active attempts is the signal for
+	// gateway or network instability affecting learners mid-lab.
+	metrics.WSConnectionsTotal.Inc()
+	metrics.WSSessionsActive.Inc()
+	defer metrics.WSSessionsActive.Dec()
+
 	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Hour) // doc-consistent upper bound; real teardown is TTL/idle-driven, not this timeout
 	defer cancel()
 
@@ -153,10 +165,11 @@ func (g *Gateway) rateLimitedAttach(ctx context.Context, attemptID, envID string
 // valid. A leaked token (browser history, proxy log, referrer) must not
 // stay usable indefinitely -- reconnect goes through Connect() again,
 // which mints a fresh token, so this doesn't need to outlive a single
-// working session. Kept well under defaultTTL (90min, doc §5.5) so a
+// working session. Kept well under ttl.EnvironmentDefault (90min, doc
+// §5.5, now a compile-time-linked reference via internal/ttl) so a
 // token can't outlive a reasonable session even on a long-running
 // environment.
-const sessionTokenTTL = 30 * time.Minute
+const sessionTokenTTL = ttl.SessionToken
 
 // sessionClaims is the JWT payload minted for a terminal session --
 // attempt_id/env_id are the authorization-relevant claims HandleTerminal

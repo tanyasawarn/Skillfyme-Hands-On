@@ -7,8 +7,8 @@ import {
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import type { Request } from 'express';
-import type { AuthClaims } from './auth.types';
 import { IS_PUBLIC_KEY } from './public.decorator';
+import { isRole } from './role';
 
 /**
  * Applied globally (see app.module.ts APP_GUARD). Verifies the bearer JWT
@@ -37,11 +37,20 @@ export class AuthGuard implements CanActivate {
     }
 
     try {
-      const claims = this.jwt.verify<AuthClaims>(
-        header.slice('Bearer '.length),
-      );
+      const claims = this.jwt.verify<{
+        userId: string;
+        tenantId: string;
+        role: string;
+      }>(header.slice('Bearer '.length));
       if (!claims.userId || !claims.tenantId || !claims.role) {
         throw new UnauthorizedException('token missing required claims');
+      }
+      // jwt.verify()'s generic parameter is a cast, not a runtime check --
+      // isRole() is the actual validation that makes AuthClaims.role: Role
+      // a true statement rather than an unverified assertion about
+      // attacker-controlled JWT payload content.
+      if (!isRole(claims.role)) {
+        throw new UnauthorizedException('token has an unrecognized role');
       }
       req.auth = {
         userId: claims.userId,

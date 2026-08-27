@@ -2,25 +2,18 @@
 
 import Link from 'next/link';
 import { useQueries, useQuery } from '@tanstack/react-query';
-import { api, type Attempt, type AttemptStatus } from '@/lib/api-client';
-import { DEMO_USER_ID } from '@/lib/demo-context';
-
-const STATUS_PILL: Record<AttemptStatus, { label: string; variant: string }> = {
-  CREATED: { label: 'Created', variant: 'lms-pill--muted' },
-  PROVISIONING: { label: 'Provisioning', variant: 'lms-pill--accent' },
-  READY: { label: 'Ready', variant: 'lms-pill--accent' },
-  IN_PROGRESS: { label: 'In progress', variant: 'lms-pill--accent' },
-  SUBMITTED: { label: 'Submitted', variant: 'lms-pill--accent' },
-  EVALUATING: { label: 'Evaluating', variant: 'lms-pill--accent' },
-  PASSED: { label: 'Passed', variant: 'lms-pill--success' },
-  COMPLETED: { label: 'Completed', variant: 'lms-pill--success' },
-  FAILED: { label: 'Failed', variant: 'lms-pill--danger' },
-  EVAL_FAILED: { label: 'Evaluation failed', variant: 'lms-pill--danger' },
-  PROVISION_FAILED: { label: 'Provisioning failed', variant: 'lms-pill--danger' },
-  EXPIRED: { label: 'Expired', variant: 'lms-pill--warning' },
-  ABANDONED: { label: 'Abandoned', variant: 'lms-pill--warning' },
-  SUSPENDED: { label: 'Suspended', variant: 'lms-pill--warning' },
-};
+import { api, type Attempt } from '@/lib/api-client';
+import { useSession } from '@/lib/session';
+import { Badge } from '@/components/ui/Badge';
+import { ATTEMPT_STATUS_META } from '@/lib/attempt-status';
+import { PageContainer } from '@/components/ui/PageContainer';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { CardLink } from '@/components/ui/CardLink';
+import { QueryBoundary } from '@/components/ui/QueryBoundary';
+import { formatPercent, formatMode } from '@/lib/format';
+import { activityVersionQueryOptions } from '@/lib/use-activity-version';
+import { attemptRoute } from '@/lib/routes';
+import { SectionLabel } from '@/components/ui/SectionLabel';
 
 /**
  * Doc §1.2-adjacent: a learner's past attempts, newest first. Attempt
@@ -32,9 +25,11 @@ const STATUS_PILL: Record<AttemptStatus, { label: string; variant: string }> = {
  * lab shows up once in the query cache, not once per row fetched).
  */
 export default function HistoryPage() {
+  const session = useSession();
   const { data: attempts, isLoading, isError, error } = useQuery({
-    queryKey: ['attempts', DEMO_USER_ID],
-    queryFn: () => api.listAttempts(DEMO_USER_ID),
+    queryKey: ['attempts', session?.userId],
+    queryFn: () => api.listAttempts(session!.userId),
+    enabled: !!session,
   });
 
   const sorted = attempts
@@ -43,10 +38,7 @@ export default function HistoryPage() {
 
   const activityVersionIds = [...new Set(sorted.map((a) => a.activity_version_id))];
   const activityQueries = useQueries({
-    queries: activityVersionIds.map((id) => ({
-      queryKey: ['activity-version', id],
-      queryFn: () => api.getActivityVersion(id),
-    })),
+    queries: activityVersionIds.map((id) => activityVersionQueryOptions(id)),
   });
   const titleByVersionId = new Map<string, string>();
   activityVersionIds.forEach((id, i) => {
@@ -55,7 +47,7 @@ export default function HistoryPage() {
   });
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-10">
+    <PageContainer maxWidth="4xl" spacing="py-10">
       <div>
         <h1 className="font-display text-2xl font-extrabold">History</h1>
         <p className="mt-1 max-w-xl text-sm text-[var(--ink-muted)]">
@@ -63,35 +55,27 @@ export default function HistoryPage() {
         </p>
       </div>
 
-      {isLoading && <p className="mt-8 text-[var(--ink-muted)]">Loading history…</p>}
+      <QueryBoundary isLoading={isLoading || !session} isError={isError} error={error} loadingLabel="Loading history…">
+        {attempts && attempts.length === 0 && (
+          <EmptyState>
+            No attempts yet. Head to the <Link href="/catalog" className="underline">catalog</Link> to start your first lab.
+          </EmptyState>
+        )}
 
-      {isError && (
-        <div className="mt-8 rounded-md border border-[var(--danger)] bg-[var(--danger-soft)] p-4 text-sm text-[var(--danger)]">
-          Could not reach practice-core at {process.env.NEXT_PUBLIC_API_BASE_URL}. Is it running
-          (`npm run start:dev` in /practice-core)?
-          <pre className="mt-2 whitespace-pre-wrap text-xs opacity-70">{String(error)}</pre>
-        </div>
-      )}
-
-      {attempts && attempts.length === 0 && (
-        <p className="mt-8 text-[var(--ink-soft)]">
-          No attempts yet. Head to the <Link href="/catalog" className="underline">catalog</Link> to start your first lab.
-        </p>
-      )}
-
-      {sorted.length > 0 && (
-        <div className="mt-8 space-y-3">
-          {sorted.map((attempt) => (
-            <HistoryRow key={attempt.id} attempt={attempt} title={titleByVersionId.get(attempt.activity_version_id)} />
-          ))}
-        </div>
-      )}
-    </div>
+        {sorted.length > 0 && (
+          <div className="mt-8 space-y-3">
+            {sorted.map((attempt) => (
+              <HistoryRow key={attempt.id} attempt={attempt} title={titleByVersionId.get(attempt.activity_version_id)} />
+            ))}
+          </div>
+        )}
+      </QueryBoundary>
+    </PageContainer>
   );
 }
 
 function HistoryRow({ attempt, title }: { attempt: Attempt; title: string | undefined }) {
-  const pill = STATUS_PILL[attempt.status] ?? { label: attempt.status, variant: 'lms-pill--muted' };
+  const meta = ATTEMPT_STATUS_META[attempt.status] ?? { label: attempt.status, variant: 'muted' as const };
   const { data: evaluation } = useQuery({
     queryKey: ['evaluation', attempt.id],
     queryFn: () => api.getEvaluation(attempt.id),
@@ -103,24 +87,21 @@ function HistoryRow({ attempt, title }: { attempt: Attempt; title: string | unde
   });
 
   return (
-    <Link
-      href={`/attempts/${attempt.id}`}
-      className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 transition hover:border-[var(--accent)]"
-    >
+    <CardLink variant="row" href={attemptRoute(attempt.id)}>
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium text-[var(--ink)]">{title ?? attempt.activity_id}</p>
         <p className="mt-1 text-xs text-[var(--ink-muted)]">
-          {attempt.mode.replace('_', ' ')} · {new Date(attempt.created_at).toLocaleString()}
+          {formatMode(attempt.mode)} · {new Date(attempt.created_at).toLocaleString()}
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-3">
         {evaluation && (
-          <span className="font-mono-label text-[var(--ink-muted)]">
-            {Math.round(Number(evaluation.final_score) * 100)}%
-          </span>
+          <SectionLabel as="span" className="text-[var(--ink-muted)]">
+            {formatPercent(Number(evaluation.final_score))}
+          </SectionLabel>
         )}
-        <span className={`lms-pill ${pill.variant}`}>{pill.label}</span>
+        <Badge variant={meta.variant}>{meta.label}</Badge>
       </div>
-    </Link>
+    </CardLink>
   );
 }

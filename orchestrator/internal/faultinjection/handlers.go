@@ -3,16 +3,20 @@ package faultinjection
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
 // First batch of real handlers -- the T1-compatible, single-resource-patch
-// faults from content/faults/ (35 authored, 5 wired here). Each mirrors
-// the content YAML's params_schema exactly; see content/faults/<id>.yaml
+// faults from content/faults/ (35 authored; this batch plus
+// handlers_batch2.go bring wired coverage to 10). Each mirrors the
+// content YAML's params_schema exactly; see content/faults/<id>.yaml
 // for the human-facing description this handler makes real.
 func init() {
 	register("f.k8s.memory-limit-too-low", applyMemoryLimitTooLow)
@@ -24,32 +28,38 @@ func init() {
 
 // applyMemoryLimitTooLow: content/faults/f.k8s.memory-limit-too-low.yaml
 // params: service (Deployment name), limit (e.g. "96Mi").
-func applyMemoryLimitTooLow(ctx context.Context, clientset *kubernetes.Clientset, namespace string, params map[string]string) (Result, error) {
+func applyMemoryLimitTooLow(ctx context.Context, clientset kubernetes.Interface, namespace string, params map[string]string) (Result, error) {
 	service := params["service"]
 	limit := params["limit"]
 	if service == "" || limit == "" {
 		return Result{}, fmt.Errorf("f.k8s.memory-limit-too-low requires params: service, limit")
 	}
 
-	if _, err := parseQuantity(limit); err != nil {
+	limitQty, err := parseQuantity(limit)
+	if err != nil {
 		return Result{}, fmt.Errorf("invalid limit quantity %q: %w", limit, err)
 	}
 
 	deployments := clientset.AppsV1().Deployments(namespace)
-	dep, err := deployments.Get(ctx, service, metav1.GetOptions{})
-	if isNotFound(err) {
-		return notFoundResult("Deployment", service)
-	}
+	dep, notFoundOrErrResult, err := getOrNotFound(ctx, func(ctx context.Context) (*appsv1.Deployment, error) {
+		return deployments.Get(ctx, service, metav1.GetOptions{})
+	}, "Deployment", "deployment", service)
 	if err != nil {
-		return Result{}, fmt.Errorf("getting deployment %s: %w", service, err)
+		return notFoundOrErrResult, err
 	}
 	if len(dep.Spec.Template.Spec.Containers) == 0 {
 		return Result{}, fmt.Errorf("deployment %s has no containers to patch", service)
 	}
 	containerName := dep.Spec.Template.Spec.Containers[0].Name
 
-	patch := fmt.Sprintf(`{"spec":{"template":{"spec":{"containers":[{"name":%q,"resources":{"limits":{"memory":%q}}}]}}}}`, containerName, limit)
-	patchBytes, patchType := strategicMergePatch(patch)
+	patchBytes, patchType, err := patchFirstContainer(containerName, func(c *containerPatch) {
+		c.Resources = &containerPatchResources{
+			Limits: map[corev1.ResourceName]resource.Quantity{corev1.ResourceMemory: limitQty},
+		}
+	})
+	if err != nil {
+		return Result{}, err
+	}
 	if _, err := deployments.Patch(ctx, service, patchType, patchBytes, metav1.PatchOptions{}); err != nil {
 		return Result{}, fmt.Errorf("patching deployment %s memory limit: %w", service, err)
 	}
@@ -64,7 +74,7 @@ func applyMemoryLimitTooLow(ctx context.Context, clientset *kubernetes.Clientset
 
 // applyWrongServiceSelector: content/faults/f.k8s.wrong-service-selector.yaml
 // params: service, wrong_selector_value.
-func applyWrongServiceSelector(ctx context.Context, clientset *kubernetes.Clientset, namespace string, params map[string]string) (Result, error) {
+func applyWrongServiceSelector(ctx context.Context, clientset kubernetes.Interface, namespace string, params map[string]string) (Result, error) {
 	service := params["service"]
 	wrongValue := params["wrong_selector_value"]
 	if service == "" || wrongValue == "" {
@@ -72,12 +82,11 @@ func applyWrongServiceSelector(ctx context.Context, clientset *kubernetes.Client
 	}
 
 	services := clientset.CoreV1().Services(namespace)
-	svc, err := services.Get(ctx, service, metav1.GetOptions{})
-	if isNotFound(err) {
-		return notFoundResult("Service", service)
-	}
+	svc, notFoundOrErrResult, err := getOrNotFound(ctx, func(ctx context.Context) (*corev1.Service, error) {
+		return services.Get(ctx, service, metav1.GetOptions{})
+	}, "Service", "service", service)
 	if err != nil {
-		return Result{}, fmt.Errorf("getting service %s: %w", service, err)
+		return notFoundOrErrResult, err
 	}
 	if len(svc.Spec.Selector) == 0 {
 		return Result{}, fmt.Errorf("service %s has no selector to break", service)
@@ -111,7 +120,7 @@ func applyWrongServiceSelector(ctx context.Context, clientset *kubernetes.Client
 // not to block the RPC caller noticeably. Returns false (not an error)
 // on timeout: SymptomVerified=false is an honest "couldn't confirm
 // within budget," not a claim the fault failed to apply.
-func pollNoEndpoints(ctx context.Context, clientset *kubernetes.Clientset, namespace, service string) bool {
+func pollNoEndpoints(ctx context.Context, clientset kubernetes.Interface, namespace, service string) bool {
 	const maxAttempts = 10
 	const interval = 500 * time.Millisecond
 	for i := 0; i < maxAttempts; i++ {
@@ -127,7 +136,7 @@ func pollNoEndpoints(ctx context.Context, clientset *kubernetes.Clientset, names
 	return false
 }
 
-func noEndpoints(ctx context.Context, clientset *kubernetes.Clientset, namespace, service string) bool {
+func noEndpoints(ctx context.Context, clientset kubernetes.Interface, namespace, service string) bool {
 	ep, err := clientset.CoreV1().Endpoints(namespace).Get(ctx, service, metav1.GetOptions{})
 	if err != nil {
 		return false
@@ -142,28 +151,47 @@ func noEndpoints(ctx context.Context, clientset *kubernetes.Clientset, namespace
 
 // applyReadinessProbeTooAggressive: content/faults/f.k8s.readiness-probe-too-aggressive.yaml
 // params: service, timeout_seconds.
-func applyReadinessProbeTooAggressive(ctx context.Context, clientset *kubernetes.Clientset, namespace string, params map[string]string) (Result, error) {
+func applyReadinessProbeTooAggressive(ctx context.Context, clientset kubernetes.Interface, namespace string, params map[string]string) (Result, error) {
 	service := params["service"]
-	timeoutSeconds := params["timeout_seconds"]
-	if service == "" || timeoutSeconds == "" {
+	timeoutSecondsStr := params["timeout_seconds"]
+	if service == "" || timeoutSecondsStr == "" {
 		return Result{}, fmt.Errorf("f.k8s.readiness-probe-too-aggressive requires params: service, timeout_seconds")
+	}
+	// timeout_seconds must be a real integer regardless of how the patch
+	// is built -- readinessProbe.timeoutSeconds is a K8s int32 field, so
+	// a non-numeric value would fail at the API server, not silently
+	// coerce. (PLAN.md Phase 3's U11 note: this used to also be the ONE
+	// field in this package that couldn't use the %q-everywhere
+	// injection-safety convention, since it needed to be embedded as a
+	// raw JSON number in a hand-built fmt.Sprintf string -- patchFirstContainer's
+	// real struct marshaling below has since made that whole class of
+	// concern moot for every field in this package, not just this one.)
+	timeoutSeconds, err := strconv.Atoi(timeoutSecondsStr)
+	if err != nil || timeoutSeconds < 0 {
+		return Result{}, fmt.Errorf("invalid timeout_seconds %q: must be a non-negative integer", timeoutSecondsStr)
 	}
 
 	deployments := clientset.AppsV1().Deployments(namespace)
-	dep, err := deployments.Get(ctx, service, metav1.GetOptions{})
-	if isNotFound(err) {
-		return notFoundResult("Deployment", service)
-	}
+	dep, notFoundOrErrResult, err := getOrNotFound(ctx, func(ctx context.Context) (*appsv1.Deployment, error) {
+		return deployments.Get(ctx, service, metav1.GetOptions{})
+	}, "Deployment", "deployment", service)
 	if err != nil {
-		return Result{}, fmt.Errorf("getting deployment %s: %w", service, err)
+		return notFoundOrErrResult, err
 	}
 	if len(dep.Spec.Template.Spec.Containers) == 0 {
 		return Result{}, fmt.Errorf("deployment %s has no containers to patch", service)
 	}
 	containerName := dep.Spec.Template.Spec.Containers[0].Name
 
-	patch := fmt.Sprintf(`{"spec":{"template":{"spec":{"containers":[{"name":%q,"readinessProbe":{"timeoutSeconds":%s,"initialDelaySeconds":0}}]}}}}`, containerName, timeoutSeconds)
-	patchBytes, patchType := strategicMergePatch(patch)
+	patchBytes, patchType, err := patchFirstContainer(containerName, func(c *containerPatch) {
+		c.Readiness = &containerPatchProbe{
+			TimeoutSeconds:      int32Ptr(int32(timeoutSeconds)),
+			InitialDelaySeconds: int32Ptr(0),
+		}
+	})
+	if err != nil {
+		return Result{}, err
+	}
 	if _, err := deployments.Patch(ctx, service, patchType, patchBytes, metav1.PatchOptions{}); err != nil {
 		return Result{}, fmt.Errorf("patching deployment %s readiness probe: %w", service, err)
 	}
@@ -173,7 +201,7 @@ func applyReadinessProbeTooAggressive(ctx context.Context, clientset *kubernetes
 
 // applyConfigMapKeyRenamed: content/faults/f.k8s.configmap-key-renamed.yaml
 // params: configmap, old_key, new_key.
-func applyConfigMapKeyRenamed(ctx context.Context, clientset *kubernetes.Clientset, namespace string, params map[string]string) (Result, error) {
+func applyConfigMapKeyRenamed(ctx context.Context, clientset kubernetes.Interface, namespace string, params map[string]string) (Result, error) {
 	name := params["configmap"]
 	oldKey := params["old_key"]
 	newKey := params["new_key"]
@@ -182,12 +210,11 @@ func applyConfigMapKeyRenamed(ctx context.Context, clientset *kubernetes.Clients
 	}
 
 	configMaps := clientset.CoreV1().ConfigMaps(namespace)
-	cm, err := configMaps.Get(ctx, name, metav1.GetOptions{})
-	if isNotFound(err) {
-		return notFoundResult("ConfigMap", name)
-	}
+	cm, notFoundOrErrResult, err := getOrNotFound(ctx, func(ctx context.Context) (*corev1.ConfigMap, error) {
+		return configMaps.Get(ctx, name, metav1.GetOptions{})
+	}, "ConfigMap", "configmap", name)
 	if err != nil {
-		return Result{}, fmt.Errorf("getting configmap %s: %w", name, err)
+		return notFoundOrErrResult, err
 	}
 	value, ok := cm.Data[oldKey]
 	if !ok {
@@ -216,7 +243,7 @@ func applyConfigMapKeyRenamed(ctx context.Context, clientset *kubernetes.Clients
 
 // applyTaintBlocksScheduling: content/faults/f.k8s.taint-blocks-scheduling.yaml
 // params: node, taint_key, taint_effect.
-func applyTaintBlocksScheduling(ctx context.Context, clientset *kubernetes.Clientset, namespace string, params map[string]string) (Result, error) {
+func applyTaintBlocksScheduling(ctx context.Context, clientset kubernetes.Interface, namespace string, params map[string]string) (Result, error) {
 	nodeName := params["node"]
 	taintKey := params["taint_key"]
 	taintEffect := params["taint_effect"]
@@ -232,12 +259,11 @@ func applyTaintBlocksScheduling(ctx context.Context, clientset *kubernetes.Clien
 	}
 
 	nodes := clientset.CoreV1().Nodes()
-	node, err := nodes.Get(ctx, nodeName, metav1.GetOptions{})
-	if isNotFound(err) {
-		return notFoundResult("Node", nodeName)
-	}
+	node, notFoundOrErrResult, err := getOrNotFound(ctx, func(ctx context.Context) (*corev1.Node, error) {
+		return nodes.Get(ctx, nodeName, metav1.GetOptions{})
+	}, "Node", "node", nodeName)
 	if err != nil {
-		return Result{}, fmt.Errorf("getting node %s: %w", nodeName, err)
+		return notFoundOrErrResult, err
 	}
 
 	for _, t := range node.Spec.Taints {

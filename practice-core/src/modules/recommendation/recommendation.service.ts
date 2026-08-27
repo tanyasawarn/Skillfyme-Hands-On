@@ -3,6 +3,8 @@ import { sql, type Kysely, type SqlBool } from 'kysely';
 import { KYSELY } from '../../db/database.module';
 import type { Database } from '../../db/schema';
 import { EligibilityService } from '../attempt/eligibility.service';
+import { publishedActivityVersionsQuery } from '../../common/published-activity-versions-query';
+import { MasteryConstants } from '../../common/constants';
 
 export interface Recommendation {
   activityId: string;
@@ -134,24 +136,25 @@ export class RecommendationService {
 
     if (relevantTopicIds.length === 0) return;
 
-    const rows = await this.db
-      .selectFrom('content.activity_topic as at')
-      .innerJoin(
-        'content.activity_version as av',
-        'av.id',
-        'at.activity_version_id',
-      )
-      .innerJoin('content.activity as a', 'a.id', 'av.activity_id')
-      .innerJoin('content.topic as t', 't.id', 'at.topic_id')
-      .select([
-        'a.id as activity_id',
-        'av.id as activity_version_id',
-        'a.slug',
-        't.title as topic_title',
-        'at.relevance',
-      ])
-      .where('a.tenant_id', '=', tenantId)
-      .where('av.status', '=', 'PUBLISHED')
+    const rows = await publishedActivityVersionsQuery(
+      this.db
+        .selectFrom('content.activity_topic as at')
+        .innerJoin(
+          'content.activity_version as av',
+          'av.id',
+          'at.activity_version_id',
+        )
+        .innerJoin('content.activity as a', 'a.id', 'av.activity_id')
+        .innerJoin('content.topic as t', 't.id', 'at.topic_id')
+        .select([
+          'a.id as activity_id',
+          'av.id as activity_version_id',
+          'a.slug',
+          't.title as topic_title',
+          'at.relevance',
+        ]),
+      tenantId,
+    )
       .where('at.topic_id', 'in', relevantTopicIds)
       .where(
         'a.id',
@@ -207,7 +210,7 @@ export class RecommendationService {
       .where('a.status', '=', 'FAILED')
       .where(sql<SqlBool>`a.created_at >= ${thirtyDaysAgo}`)
       .where('ask.is_primary', '=', true)
-      .where('sm.p_mastery', '<', 0.55)
+      .where('sm.p_mastery', '<', MasteryConstants.REQUIRES_GATE_THRESHOLD)
       .distinct()
       .execute();
 
@@ -221,28 +224,30 @@ export class RecommendationService {
       // skill-DAG-ancestor walk (that needs skill_closure traversal
       // integrated with difficulty_elo comparison -- a reasonable Phase 4
       // extension once Elo calibration, §2.6, has real data).
-      const rows = await this.db
-        .selectFrom('content.activity_skill as ask')
-        .innerJoin(
-          'content.activity_version as av',
-          'av.id',
-          'ask.activity_version_id',
-        )
-        .innerJoin('content.activity as a', 'a.id', 'av.activity_id')
-        .select([
-          'a.id as activity_id',
-          'av.id as activity_version_id',
-          'a.slug',
-          'av.difficulty_level',
-        ])
+      const rows = await publishedActivityVersionsQuery(
+        this.db
+          .selectFrom('content.activity_skill as ask')
+          .innerJoin(
+            'content.activity_version as av',
+            'av.id',
+            'ask.activity_version_id',
+          )
+          .innerJoin('content.activity as a', 'a.id', 'av.activity_id')
+          .select([
+            'a.id as activity_id',
+            'av.id as activity_version_id',
+            'a.slug',
+            'av.difficulty_level',
+          ]),
+        tenantId,
+      )
         .where('ask.skill_id', '=', skill_id)
-        .where('a.tenant_id', '=', tenantId)
-        .where('av.status', '=', 'PUBLISHED')
         .where('av.difficulty_level', 'in', ['L1', 'L2'])
         .execute();
 
       for (const row of rows) {
-        const score = 0.7 + (0.55 - Number(p_mastery)); // lower mastery -> higher urgency
+        const score =
+          0.7 + (MasteryConstants.REQUIRES_GATE_THRESHOLD - Number(p_mastery)); // lower mastery -> higher urgency
         const existing = candidates.get(row.activity_version_id);
         if (!existing || existing.score < score) {
           candidates.set(row.activity_version_id, {

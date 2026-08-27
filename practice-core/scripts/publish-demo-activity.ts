@@ -12,6 +12,7 @@ import { Pool } from 'pg';
 import type { Database } from '../src/db/schema';
 import { SpecLintService } from '../src/modules/content-ci/spec-lint.service';
 import { CatalogRepository } from '../src/modules/catalog/catalog.repository';
+import type { ActivitySpec } from '../src/modules/catalog/activity-spec';
 
 const DEMO_TENANT_ID = '11111111-1111-1111-1111-111111111111';
 
@@ -29,14 +30,7 @@ async function main() {
 
   const yamlPath = path.resolve(__dirname, '../../content/activities/lab.k8s.deploy-node-app.yaml');
   const source = fs.readFileSync(yamlPath, 'utf-8');
-  const spec = lint.parseYaml(source) as {
-    id: string;
-    version: number;
-    mode: 'GUIDED_LAB' | 'PRODUCTION_SIM' | 'PROJECT';
-    meta: { difficulty_level: string; estimated_minutes: number };
-    environment: { blueprint: string; cost_budget_usd: number };
-    skills: Array<{ skill: string; weight: number; primary: boolean; bloom?: string }>;
-  };
+  const spec = lint.parseYaml(source) as ActivitySpec;
 
   const knownSkills = await db.selectFrom('skill.skill').select('slug').execute();
   const result = lint.lint(spec, new Set(knownSkills.map((s) => s.slug)));

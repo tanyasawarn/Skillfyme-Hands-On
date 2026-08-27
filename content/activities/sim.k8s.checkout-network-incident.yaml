@@ -1,0 +1,180 @@
+id: sim.k8s.checkout-network-incident
+version: 1
+mode: PRODUCTION_SIM
+status: DRAFT
+
+meta:
+  title: "INC-5809: checkout is unreachable from two independent causes"
+  summary: >
+    A Service selector edit silently dropped every real endpoint, and
+    separately the namespace's own egress-proxy access was removed --
+    diagnose both independent causes before assuming either one alone
+    explains the outage.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [k8s, networking, incident-response, troubleshooting]
+
+curriculum:
+  primary_topic: topic.devops.cloud-k8s-serverless
+  also_relevant: [topic.cloud.zero-trust-security]
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: k8s.services
+    weight: 0.35
+    primary: true
+    bloom: analyze
+  - skill: k8s.troubleshooting
+    weight: 0.3
+    primary: false
+    bloom: analyze
+  - skill: cloud.zero-trust-security
+    weight: 0.2
+    primary: false
+    bloom: analyze
+  - skill: sre.postmortem-authorship
+    weight: 0.15
+    primary: false
+    bloom: create
+
+prerequisites:
+  hard: [k8s.troubleshooting]
+  soft: [k8s.services, cloud.zero-trust-security]
+
+objectives:
+  - Diagnose and fix a Service with zero matching endpoints
+  - Diagnose and fix a namespace missing its egress-proxy access policy
+  - Write a root-cause/timeline/remediation/prevention incident note
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 3Gi
+  ttl_minutes: 30
+  idle_timeout_minutes: 15
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.checkout-deployment.v1
+  cost_budget_usd: 0.20
+
+surfaces: [terminal, editor, k8s_dashboard_readonly]
+
+# No HTTP health_gate against the checkout Service itself -- this
+# activity's own first fault deliberately breaks that Service's
+# endpoints at T0, which would make the gate fail before the learner
+# even starts. Phase 1's pod-Ready gate (implicit in fixture apply)
+# already covers the meaningful precondition (checkout's pods are
+# genuinely running and healthy before either fault lands).
+faults:
+  - id: f.k8s.wrong-service-selector
+    params: { service: checkout, wrong_selector_value: "checkout-v2-does-not-exist" }
+    apply_at: T0
+  - id: f.cloud.egress-proxy-allowlist-too-strict
+    params: {}
+    apply_at: T0
+
+process_signals:
+  diagnostic_efficiency:
+    good_actions:
+      - "kubectl get endpoints"
+      - "kubectl get svc"
+      - "kubectl get pods --show-labels"
+      - "kubectl get networkpolicy"
+    bad_actions:
+      - "kubectl delete svc"
+      - "kubectl delete deploy"
+    scoring: ratio_and_ordering
+  blast_radius:
+    forbidden:
+      - "kubectl delete ns"
+      - "kubectl delete namespace"
+
+tasks:
+  - key: t1
+    title: "INC-5809 (P3): checkout Service has zero endpoints"
+    required: true
+    instructions_md: |
+      Requests to the `checkout` Service fail immediately -- `kubectl
+      get endpoints checkout` shows an empty ADDRESSES list even though
+      the underlying pods are Running and Ready.
+
+      Diagnose and fix the selector mismatch.
+    validators:
+      - id: v.checkout-has-endpoints
+        type: K8S_ASSERT
+        run: "kubectl get endpoints checkout -o jsonpath='{.subsets[0].addresses[0].ip}'"
+        expect:
+          jsonpath: "$"
+          op: exists
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "Compare `kubectl get svc checkout -o yaml`'s spec.selector against `kubectl get pods --show-labels` -- they no longer match."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "A Service with healthy backing pods but zero endpoints means the Service's own selector no longer matches those pods' labels -- nothing is wrong with the pods themselves."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: "The namespace can't reach the egress proxy at all"
+    required: true
+    instructions_md: |
+      Any outbound call from a pod in this namespace hangs and times
+      out -- not an HTTP error, no response at all.
+
+      **Access:** read-write `kubectl` access to this namespace.
+
+      Diagnose and restore the namespace's own path to the platform's
+      egress proxy.
+    validators:
+      - id: v.egress-proxy-policy-restored
+        type: K8S_ASSERT
+        run: "kubectl get networkpolicy allow-egress-proxy -o jsonpath='{.metadata.name}'"
+        expect:
+          jsonpath: "$"
+          op: eq
+          value: "allow-egress-proxy"
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "`kubectl get networkpolicy` in this namespace -- the allow-egress-proxy policy that permits reaching the shared Squid proxy is missing."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "A connection that hangs and times out (never a clean refusal) at the network layer, not an HTTP error, points at a missing NetworkPolicy allow rule, not an application bug."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+artifacts_required:
+  - key: incident-note
+    type: MARKDOWN
+    rubric: rub.incident-note.v2
+
+scoring:
+  profile: sp.production-sim.default
+
+ai_mentor:
+  persona: senior_engineer
+  max_hints: 2
+  token_budget: 6000
+  solution_visibility: HIDDEN
+  policy: policy.sim.socratic.v1
+
+reference_solution:
+  repo_path: solutions/sim.k8s.checkout-network-incident/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

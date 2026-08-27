@@ -1,0 +1,9 @@
+# Build artifacts and local-only files -- keep the build context small so
+# `docker build` doesn't ship a compiled binary or local .env into the image.
+orchestrator
+*.env
+.env
+.env.*
+!.env.example
+**/*_test.go
+.local/

@@ -1,0 +1,143 @@
+id: sim.gitlab.branch-protection-incident
+version: 1
+mode: PRODUCTION_SIM
+status: DRAFT
+
+meta:
+  title: "INC-5607: an automated version-bump commit can't push to main"
+  summary: >
+    A CI job's auto-commit step (a routine version bump) is failing to
+    push to main -- diagnose why the CI identity is being rejected by
+    branch protection and fix it without weakening protection for
+    everyone else.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [gitlab, cicd, incident-response, troubleshooting]
+
+curriculum:
+  primary_topic: topic.devops.cicd-troubleshooting
+  also_relevant: []
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: gitlab.cicd-pipelines
+    weight: 0.5
+    primary: true
+    bloom: analyze
+  - skill: cicd.troubleshooting
+    weight: 0.3
+    primary: false
+    bloom: analyze
+  - skill: sre.postmortem-authorship
+    weight: 0.2
+    primary: false
+    bloom: create
+
+prerequisites:
+  hard: []
+  soft: [gitlab.cicd-pipelines]
+
+objectives:
+  - Diagnose why the CI identity's push to a protected branch is rejected
+  - Grant the minimal necessary push exception without disabling branch protection
+  - Write a root-cause/timeline/remediation/prevention incident note
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1Gi
+    disk: 3Gi
+  ttl_minutes: 30
+  idle_timeout_minutes: 15
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.gitea-repo.v1
+  cost_budget_usd: 0.20
+
+surfaces: [terminal, editor]
+
+health_gate:
+  - type: HTTP_PROBE
+    url: "http://practice-gitea:3000/api/healthz"
+    expect_status: 200
+    retries: 30
+
+faults:
+  - id: f.gitlab.protected-branch-blocks-push
+    params: { branch: main }
+    apply_at: T0
+
+process_signals:
+  diagnostic_efficiency:
+    good_actions:
+      - "git push"
+      - "curl"
+    bad_actions:
+      - "git push --force"
+    scoring: ratio_and_ordering
+  blast_radius:
+    forbidden:
+      - "kubectl delete ns"
+
+tasks:
+  - key: t1
+    title: "INC-5607 (P4): CI's auto-commit push to main is rejected"
+    required: true
+    instructions_md: |
+      A CI job's routine version-bump commit is failing to push to
+      `main` with a real "Not allowed to push to protected branch"
+      rejection from the git server.
+
+      **Access:** exec access into the practice-gitea-runner pod, plus
+      the repo's real branch-protection API.
+
+      Diagnose the real cause and grant the minimal necessary exception
+      -- do not disable branch protection for everyone.
+    validators:
+      - id: v.ci-can-push
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-gitea-runner -- sh -c 'cd /work && rm -rf verify && mkdir verify && cd verify && git clone -q http://ci-blocked:ci-blocked-dev-pw-12345@practice-gitea:3000/admin/practice-repo.git . && git config user.email t@t.com && git config user.name t && echo x >> verify.txt && git add verify.txt && git commit -q -m verify && git push origin main'"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "Check the repo's branch protection push-whitelist -- ci-blocked needs to be added to it, the same way ci-legit already is."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "Being a 'write' collaborator is not the same as being on a protected branch's push whitelist -- those are two separate permission layers."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+artifacts_required:
+  - key: incident-note
+    type: MARKDOWN
+    rubric: rub.incident-note.v2
+
+scoring:
+  profile: sp.production-sim.default
+
+ai_mentor:
+  persona: senior_engineer
+  max_hints: 2
+  token_budget: 6000
+  solution_visibility: HIDDEN
+  policy: policy.sim.socratic.v1
+
+reference_solution:
+  repo_path: solutions/sim.gitlab.branch-protection-incident/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

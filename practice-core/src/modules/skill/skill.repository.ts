@@ -1,8 +1,7 @@
-import { Inject, Injectable } from '@nestjs/common';
-import type { Kysely } from 'kysely';
+import { Injectable } from '@nestjs/common';
 import { sql } from 'kysely';
-import { KYSELY } from '../../db/database.module';
-import type { Database, SkillEdgeType } from '../../db/schema';
+import type { SkillEdgeType } from '../../db/schema';
+import { BaseRepository } from '../../common/base.repository';
 
 export interface SkillEdgeInput {
   fromSkillId: string;
@@ -12,9 +11,7 @@ export interface SkillEdgeInput {
 }
 
 @Injectable()
-export class SkillRepository {
-  constructor(@Inject(KYSELY) private readonly db: Kysely<Database>) {}
-
+export class SkillRepository extends BaseRepository {
   async createSkill(input: {
     slug: string;
     name: string;

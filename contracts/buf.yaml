@@ -1,0 +1,36 @@
+# buf configuration for the `contracts/` package.
+#
+# Purpose (see contracts/README.md): make the "contracts are frozen,
+# changes go through a both-owner PR" rule from PLAN.md enforceable
+# rather than advisory. `buf lint` keeps the proto stylistically
+# consistent; `buf breaking` (run in CI against origin/main) rejects any
+# wire-incompatible change -- field renumber, type change, field or RPC
+# removal -- so a post-freeze change can only ever be additive.
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  # The service predates buf adoption and already ships generated Go +
+  # a dynamic TS loader against these exact names. Every rule listed
+  # below is disabled ONLY because obeying it now would itself be a
+  # wire/codegen-breaking rename of an already-shipped surface -- the
+  # thing this whole config exists to prevent. New messages and RPCs
+  # added from here on still get the full STANDARD rule set; these
+  # exceptions are frozen to the current file and reviewed in the
+  # both-owner PR if ever revisited.
+  except:
+    - PACKAGE_VERSION_SUFFIX        # package is already ...orchestrator.v1
+    - PACKAGE_DIRECTORY_MATCH       # proto lives at contracts/orchestrator.proto, not .../v1/
+    - SERVICE_SUFFIX               # service is "EnvironmentOrchestrator", not "...Service" (generated Go type, TS loader path)
+    - RPC_REQUEST_STANDARD_NAME    # MintCredentialsRequest predates the RPC-name-prefixed convention
+    - RPC_RESPONSE_STANDARD_NAME   # Restore reuses ProvisionResponse by design (identical shape)
+    - RPC_REQUEST_RESPONSE_UNIQUE  # Restore + Provision intentionally share ProvisionResponse
+breaking:
+  use:
+    - FILE
+  # WIRE_JSON would also flag JSON-name changes; this contract is
+  # consumed as protobuf binary (Go generated code) and as a dynamic
+  # @grpc/proto-loader client (TS) -- FILE covers both. Field additions
+  # remain allowed; that is the whole point of the additive-only rule.

@@ -6,12 +6,12 @@ on:
   pull_request:
 
 # Doc §3.5's content-CI concept ("lint -> provision -> golden path ->
-# null path -> flake -> timing -> cost") only has its lint step covered
-# here -- the rest (scripts/content-ci.ts) needs a real k3s cluster and
-# a live orchestrator process, which this workflow doesn't provision.
-# That harness is meant to run against a real dev/staging cluster, not
-# GitHub Actions' hosted runners; see scripts/content-ci.ts's own doc
-# comment for how to invoke it manually.
+# null path -> flake -> timing -> cost"): the LINT step runs here (the
+# `content-lint` job below). The provision/golden/null/flake/timing/cost
+# stages need a real k3s cluster + a live orchestrator, so they run in a
+# SEPARATE workflow (.github/workflows/content-ci.yml) on a self-hosted
+# runner -- nightly for the full library, per-PR for changed activities.
+# See evaluation/content-ci/README.md and docs/content-ci-runner.md.
 jobs:
   practice-core:
     name: practice-core (build, lint, unit + integration tests)
@@ -108,6 +108,61 @@ jobs:
       - run: go vet ./...
       - run: gofmt -l . | tee /tmp/gofmt-out.txt && test ! -s /tmp/gofmt-out.txt
       - run: go test ./...
+
+  # ---------------------------------------------------------------------
+  # Contract governance (contracts/README.md, contracts/CHANGELOG.md).
+  # Runs on every PR -- cheap, and the whole point is that a contract
+  # change can't slip through. `paths` keeps it from adding latency to
+  # unrelated PRs while still running on anything that touches the
+  # contract or its generated stubs.
+  # ---------------------------------------------------------------------
+  contracts:
+    name: contracts (buf lint + breaking + stub freshness)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # buf breaking compares against origin/main; needs history.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: orchestrator/go.mod
+          cache-dependency-path: orchestrator/go.sum
+
+      # Pin buf to the version contracts/README.md documents. `go install`
+      # keeps it in lockstep with the Go toolchain already set up above,
+      # no extra action or download.
+      - name: Install buf
+        run: go install github.com/bufbuild/buf/cmd/buf@v1.72.0
+
+      - name: buf lint
+        working-directory: contracts
+        run: buf lint
+
+      # Additive-only guarantee. Fails (exit 100) on any wire-incompatible
+      # change: field renumber, type change, field/RPC removal.
+      - name: buf breaking (vs origin/main)
+        run: buf breaking contracts --against '.git#branch=main,ref=origin/main,subdir=contracts'
+
+      # Stub freshness: the committed orchestrator/pkg/pb/*.pb.go must
+      # already match what `buf generate` produces from the current
+      # proto. A proto edit that forgot to regenerate fails here.
+      - name: Regenerate Go stubs
+        working-directory: contracts
+        run: buf generate
+
+      - name: Assert stubs are up to date
+        run: |
+          if ! git diff --exit-code -- orchestrator/pkg/pb/; then
+            echo "::error::orchestrator/pkg/pb is stale. Run 'cd contracts && buf generate' and commit the result."
+            exit 1
+          fi
+
+      # Sanity: the regenerated stubs still build.
+      - name: orchestrator builds against regenerated stubs
+        working-directory: orchestrator
+        run: go build ./...
 
   web:
     name: web (type-check, lint, build)

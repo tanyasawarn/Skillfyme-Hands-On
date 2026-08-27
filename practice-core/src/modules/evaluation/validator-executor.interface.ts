@@ -60,9 +60,16 @@ export interface ValidatorExecutor {
    * validator is worse than no validator" -- retry/backoff is the
    * executor's responsibility, not the caller's, since only the executor
    * knows what "eventual consistency" means for a given check type.
+   *
+   * attemptId closes the same access-control gap InjectFaultRequest's
+   * attemptId field closed (PHASE2_CLOSEOUT.md): the real executor
+   * (GrpcValidatorExecutor) forwards this to the orchestrator's
+   * ExecValidator RPC, which verifies it matches env.environment.attempt_id
+   * for environmentId before running anything. Required.
    */
   execute(
     environmentId: string,
+    attemptId: string,
     spec: ValidatorSpec,
   ): Promise<ValidatorExecutionResult>;
 }

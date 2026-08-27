@@ -169,7 +169,8 @@ export type AttemptStatus =
   | 'SUSPENDED'
   | 'EVAL_FAILED'
   | 'EXPIRED'
-  | 'ABANDONED';
+  | 'ABANDONED'
+  | 'CACHED';
 
 export interface AttemptTable {
   id: Generated<string>;
@@ -189,10 +190,14 @@ export interface AttemptTable {
   submitted_at: Timestamp | null;
   completed_at: Timestamp | null;
   expires_at: Timestamp | null;
+  last_activity_at: Generated<Timestamp>;
   active_seconds: Generated<number>;
   reset_count: Generated<number>;
   hint_penalty_total: Generated<number>;
   version: Generated<number>;
+  /** Stub for real workspace-snapshot capture (revised lifecycle §5) -- always null until that's built. See AttemptService.cache()'s doc comment. */
+  snapshot_id: string | null;
+  snapshot_taken_at: Timestamp | null;
 }
 
 export interface AttemptTaskStateTable {
@@ -272,6 +277,8 @@ export interface ArtifactTable {
   checksum: string | null;
   created_at: Generated<Timestamp>;
   retain_until: Timestamp | null;
+  /** Doc §6.5/§7.3: inline text content for small text artifacts (e.g. an incident note) -- see migration 0006's own comment on why this exists instead of always requiring object storage. */
+  content: string | null;
 }
 
 export interface SkillMasteryTable {

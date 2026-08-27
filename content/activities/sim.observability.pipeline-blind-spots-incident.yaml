@@ -1,0 +1,245 @@
+id: sim.observability.pipeline-blind-spots-incident
+version: 1
+mode: PRODUCTION_SIM
+status: DRAFT
+
+meta:
+  title: "INC-5304: the observability stack has four independent blind spots"
+  summary: >
+    A Tekton TaskRun keeps failing before it even starts, a Prometheus
+    scrape target has gone dark, an alert rule silently never fires, and
+    Jaeger is showing broken traces -- diagnose all four before the next
+    on-call rotation inherits them blind.
+  difficulty_level: L4
+  estimated_minutes: 55
+  locale: en
+  authors: [content-team]
+  tags: [tekton, prometheus, jaeger, observability, incident-response]
+
+curriculum:
+  primary_topic: topic.devops.tekton-pipelines
+  also_relevant: [topic.devops.observability-prometheus-basics, topic.devops.observability-tracing]
+  courses: [course.sre]
+
+skills:
+  - skill: tekton.pipelines
+    weight: 0.25
+    primary: true
+    bloom: analyze
+  - skill: observability.prometheus-basics
+    weight: 0.25
+    primary: false
+    bloom: analyze
+  - skill: observability.tracing
+    weight: 0.25
+    primary: false
+    bloom: analyze
+  - skill: sre.postmortem-authorship
+    weight: 0.25
+    primary: false
+    bloom: create
+
+prerequisites:
+  hard: [k8s.troubleshooting]
+  soft: [tekton.pipelines, observability.prometheus-basics, observability.tracing]
+
+objectives:
+  - Diagnose why a Tekton TaskRun fails before any step runs
+  - Diagnose why a Prometheus scrape target shows no data
+  - Diagnose why a known-bad condition never triggers its alert
+  - Diagnose why a single user request shows as two disconnected traces in Jaeger
+  - Write a root-cause/timeline/remediation/prevention incident note covering all four
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "2"
+    memory: 3Gi
+    disk: 5Gi
+  ttl_minutes: 70
+  idle_timeout_minutes: 15
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.tekton-pipeline.v1
+    - fixture: fx.prometheus-minimal.v1
+    - fixture: fx.jaeger-minimal.v1
+  cost_budget_usd: 0.40
+
+surfaces: [terminal, editor, k8s_dashboard_readonly]
+
+health_gate:
+  - type: HTTP_PROBE
+    url: "http://practice-frontend:8080/"
+    expect_status: 200
+    retries: 30
+
+faults:
+  - id: f.tekton.task-missing-workspace-binding
+    params: { taskrun: practice-taskrun-broken, missing_workspace: source }
+    apply_at: T0
+  - id: f.prometheus.scrape-target-down
+    params: { job_name: practice-target }
+    apply_at: T0
+  - id: f.prometheus.alert-rule-syntax-silent-fail
+    params: { rules_file: practice-alerts }
+    apply_at: T0
+  - id: f.jaeger.missing-trace-context-propagation
+    params: { service: practice-frontend }
+    apply_at: T0
+
+process_signals:
+  diagnostic_efficiency:
+    good_actions:
+      - "kubectl get taskrun"
+      - "kubectl describe taskrun"
+      - "kubectl logs"
+      - "kubectl get pods"
+    bad_actions:
+      - "kubectl delete taskrun --all"
+      - "kubectl delete deploy"
+    scoring: ratio_and_ordering
+  blast_radius:
+    forbidden:
+      - "kubectl delete ns"
+      - "kubectl delete namespace"
+
+tasks:
+  - key: t1
+    title: "INC-5304 (P3): Tekton TaskRun fails before any step runs"
+    required: true
+    instructions_md: |
+      A new TaskRun (`practice-taskrun-broken`) referencing the
+      existing `practice-task` Task fails immediately -- `kubectl get
+      taskrun` shows a failure status before any step's logs even
+      exist.
+
+      Diagnose and fix the TaskRun so it completes successfully.
+    validators:
+      - id: v.taskrun-succeeded
+        type: K8S_ASSERT
+        run: "kubectl get taskrun practice-taskrun-broken -o jsonpath='{.status.conditions[0].status}'"
+        expect:
+          jsonpath: "$"
+          op: eq
+          value: "True"
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "The TaskRun still hasn't succeeded. `kubectl get taskrun practice-taskrun-broken -o yaml` — check status.conditions[0].message against what the Task actually declares under spec.workspaces."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "A TaskRun that fails before any step's container even starts is almost always a workspace-binding mismatch, not a script bug."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: "Prometheus scrape target shows no data"
+    required: true
+    instructions_md: |
+      Querying for `practice-target`'s expected metric in Prometheus
+      returns no data at all -- not stale data, none.
+
+      Diagnose and fix the scrape configuration.
+    validators:
+      - id: v.prometheus-target-up
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-prometheus -- wget -q -O- 'http://localhost:9090/api/v1/query?query=up%7Bjob%3D%22practice-target%22%7D'"
+        expect:
+          exit_code: 0
+        weight: 0.5
+        severity: BLOCKING
+        on_fail: "Query the Prometheus API directly and check the 'value' field for the up{job=\"practice-target\"} series."
+      - id: v.prometheus-config-valid
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-prometheus -- wget -q -O- http://localhost:9090/api/v1/targets"
+        expect:
+          exit_code: 0
+        weight: 0.5
+        severity: BLOCKING
+        on_fail: "Check /api/v1/targets for the practice-target job's real health state and lastError."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "Compare prometheus.yml's scrape_configs entry for practice-target against the real Service/pod it's supposed to reach."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t3
+    title: "A known-bad condition never fires its alert"
+    required: true
+    instructions_md: |
+      The `practice-alerts` rule group is supposed to fire when a
+      specific known-bad condition is true -- it currently never does,
+      with no error surfaced anywhere obvious.
+
+      Diagnose and fix the alert rule.
+    validators:
+      - id: v.alert-rules-loaded
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-prometheus -- wget -q -O- http://localhost:9090/api/v1/rules"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "Check /api/v1/rules for practice-alerts -- Prometheus loads what parses and silently skips what doesn't."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "A rule that never fires with no error anywhere means Prometheus never successfully loaded it in the first place -- check the rules file's own syntax, not the alerting condition's logic."
+    solution_apply: scripts/t3_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t4
+    title: "A single request shows as two disconnected traces in Jaeger"
+    required: true
+    instructions_md: |
+      A request through `practice-frontend` to `practice-backend`
+      should appear as ONE connected trace in Jaeger. It's currently
+      showing as two separate, disconnected traces.
+
+      Diagnose and fix the trace-context propagation gap.
+    validators:
+      - id: v.jaeger-single-trace
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-frontend -- wget -q -O- http://practice-backend:8080/"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "After your fix, a fresh request's trace_id in the frontend's own call to the backend should match, not be regenerated."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "The frontend's own outbound call to the backend needs to forward the SAME trace_id it received, not mint a new one."
+    solution_apply: scripts/t4_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+artifacts_required:
+  - key: incident-note
+    type: MARKDOWN
+    rubric: rub.incident-note.v2
+
+scoring:
+  profile: sp.production-sim.default
+
+ai_mentor:
+  persona: senior_engineer
+  max_hints: 4
+  token_budget: 10000
+  solution_visibility: HIDDEN
+  policy: policy.sim.socratic.v1
+
+reference_solution:
+  repo_path: solutions/sim.observability.pipeline-blind-spots-incident/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

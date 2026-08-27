@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import jwt from 'jsonwebtoken';
+import { isRole, Role } from '../src/modules/auth/role';
 
 /**
  * Dev-only token minting for the shared-secret JWT auth added ahead of
@@ -19,7 +20,12 @@ if (!secret) {
   process.exit(1);
 }
 
-const role = process.argv[2] ?? 'learner';
+const requestedRole = process.argv[2] ?? Role.LEARNER;
+if (!isRole(requestedRole)) {
+  console.error(`unrecognized role: ${requestedRole} (expected one of: learner, author, admin)`);
+  process.exit(1);
+}
+const role = requestedRole;
 const ttl = (process.argv[3] ?? '12h') as jwt.SignOptions['expiresIn'];
 
 const token = jwt.sign({ userId: DEMO_USER_ID, tenantId: DEMO_TENANT_ID, role }, secret, {

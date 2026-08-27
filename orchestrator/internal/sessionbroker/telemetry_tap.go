@@ -96,15 +96,33 @@ func (t *telemetryTap) observe(p []byte) []byte {
 	t.pending.Write(p)
 	buffered := t.pending.String()
 
+	// Withholding every byte until a '\n' arrives (the original
+	// approach) breaks per-keystroke local echo: interactive typing
+	// produces newline-free chunks (one PTY echo byte per keystroke),
+	// so every character a learner types would sit invisible until
+	// Enter finally supplied a '\n', at which point the whole typed
+	// line would appear to "arrive" all at once. Only the tail that
+	// could still grow into telemetryEnvelopeMarker needs to stay
+	// pending; everything else is safe to flush immediately, complete
+	// line or not.
 	lastNewline := strings.LastIndexByte(buffered, '\n')
 	if lastNewline == -1 {
-		// No complete line yet at all -- nothing safe to emit or parse
-		// until more bytes arrive. Keep everything pending. This can
-		// briefly delay display of a long line with no newline, but a
-		// PTY session's normal output always has frequent newlines (or
-		// terminal control sequences), so in practice this is not
-		// perceptible.
-		return nil
+		// If the marker has already started, the rest of the line (once
+		// it arrives) is telemetry payload, not learner-visible text --
+		// hold everything from the marker onward rather than risk
+		// flushing a half-formed envelope to the terminal. Only text
+		// before the marker (or, if no marker has appeared yet, text
+		// that isn't itself a possible marker-prefix) is safe to emit
+		// without waiting for the newline.
+		var safe, held string
+		if idx := strings.Index(buffered, telemetryEnvelopeMarker); idx != -1 {
+			safe, held = buffered[:idx], buffered[idx:]
+		} else {
+			safe, held = splitOnPossibleMarkerPrefix(buffered, telemetryEnvelopeMarker)
+		}
+		t.pending.Reset()
+		t.pending.WriteString(held)
+		return []byte(safe)
 	}
 
 	complete := buffered[:lastNewline+1]
@@ -135,6 +153,24 @@ func (t *telemetryTap) observe(p []byte) []byte {
 		out.WriteString(line)
 	}
 	return []byte(out.String())
+}
+
+// splitOnPossibleMarkerPrefix returns (safe, held): held is the longest
+// suffix of buffered that is itself a prefix of marker (so it might still
+// grow into a full marker match on the next call), safe is everything
+// before that suffix. If no suffix of buffered is a marker-prefix, held
+// is empty and the whole input is safe to emit now.
+func splitOnPossibleMarkerPrefix(buffered, marker string) (safe, held string) {
+	maxCheck := len(marker) - 1
+	if maxCheck > len(buffered) {
+		maxCheck = len(buffered)
+	}
+	for n := maxCheck; n > 0; n-- {
+		if strings.HasSuffix(buffered, marker[:n]) {
+			return buffered[:len(buffered)-n], buffered[len(buffered)-n:]
+		}
+	}
+	return buffered, ""
 }
 
 func (t *telemetryTap) parseAndPublish(line string) {

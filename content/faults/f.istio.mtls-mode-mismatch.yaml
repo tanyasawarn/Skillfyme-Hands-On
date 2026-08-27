@@ -1,14 +1,27 @@
+# v2: re-scoped after live verification (this session, real istiod
+# 1.30.3 control plane, real sidecar-injected pods, real STRICT
+# PeerAuthentication + conflicting DestinationRule). The MECHANISM is
+# real and correctly diagnosed (the conflict genuinely breaks the
+# call) -- confirmed live, a caller pod's own real HTTP request to the
+# affected service genuinely fails once this fault is applied and
+# genuinely succeeds before it. Only the specific wire-level symptom
+# description was wrong: v1 claimed a raw "connection reset, not a
+# clean 4xx/5xx" -- but the real observed behavior is a clean HTTP 503
+# Service Unavailable from the caller's own Envoy sidecar (confirmed via
+# a raw TCP probe: the connection completes normally, no reset at the
+# socket level -- Envoy deliberately synthesizes the 503 once it detects
+# the mTLS policy conflict).
 id: f.istio.mtls-mode-mismatch
-version: 1
+version: 2
 title: PeerAuthentication and DestinationRule TLS modes conflict
-summary: A namespace enforces STRICT mTLS but one service's DestinationRule still specifies DISABLE, causing that service's calls to fail with connection resets.
+summary: A namespace enforces STRICT mTLS but one service's DestinationRule still specifies DISABLE, causing that service's calls to fail with a synthesized 503 from the caller's own sidecar.
 
 targets: [istio.security]
-symptom_class: ConnectionResetByPeer
+symptom_class: ServiceUnavailable
 skills_probed: [istio.mtls-security]
 
 canonical_diagnostic_path:
-  - "curl between services → connection reset, not a clean 4xx/5xx"
+  - "curl between services → a clean 503 from the caller's own sidecar, not a normal application error"
   - "kubectl get peerauthentication -A -o yaml → confirm STRICT mTLS is enforced"
   - "kubectl get destinationrule -o yaml → check trafficPolicy.tls.mode for the failing service"
 
@@ -23,3 +36,4 @@ params_schema:
 
 reversible: true
 min_tier: T2_ISOLATED_MICROVM
+handler_implemented: true

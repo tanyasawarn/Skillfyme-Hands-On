@@ -39,6 +39,28 @@ data:
     acl allowed_domains dstdomain raw.githubusercontent.com
     acl allowed_domains dstdomain objects.githubusercontent.com
 
+    # Added for Phase 2 fixture fault-injection tooling (M2): each
+    # in-pod tool fixture needs to reach its own package/provider
+    # registry through this same proxy, not a direct route --
+    # confirmed live that default-deny+this-allowlist otherwise blocks
+    # even DNS resolution for a fixture pod, so these are added
+    # deliberately and specifically, not as a blanket internet carve-out.
+    acl allowed_domains dstdomain dl-cdn.alpinelinux.org
+    acl allowed_domains dstdomain registry.terraform.io
+    acl allowed_domains dstdomain releases.hashicorp.com
+    # GitHub Releases assets now redirect through this domain (NOT
+    # objects.githubusercontent.com, already allow-listed above) --
+    # confirmed live this session: a real 302 from
+    # github.com/.../releases/download/... landed here specifically.
+    acl allowed_domains dstdomain release-assets.githubusercontent.com
+    # Argo CD's own container image (application-controller, repo-server,
+    # applicationset-controller all run this one image) is published to
+    # quay.io, not Docker Hub; its redis dependency's image comes from
+    # AWS's public ECR mirror -- both confirmed by inspecting Argo CD's
+    # own upstream core-install.yaml image: references directly.
+    acl allowed_domains dstdomain .quay.io
+    acl allowed_domains dstdomain .public.ecr.aws
+
     acl SSL_ports port 443
     acl Safe_ports port 80
     acl Safe_ports port 443

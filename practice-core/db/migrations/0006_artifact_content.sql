@@ -1,0 +1,13 @@
+-- Doc §6.5 / §7.3 worked example: "artifacts_required: [{key: incident_note,
+-- type: MARKDOWN, rubric: rub.incident-note.v2}]" -- Task 8's incident-note
+-- submission needs somewhere to actually put a learner's markdown text.
+-- attempt.artifact's storage_uri column implies object storage (S3-style),
+-- but no object storage is configured anywhere in this project (confirmed:
+-- no AWS_*/STORAGE_* env vars, LogRecordingSink is a stub -- see its own
+-- doc comment). A markdown incident note is small text, not a binary blob;
+-- storing it directly is the honest, working choice rather than inventing
+-- fake S3 wiring this deployment doesn't have. storage_uri stays NOT NULL
+-- (existing contract) and gets a 'local://inline' marker for artifacts
+-- stored this way, so a future real object-storage backend is additive,
+-- not a breaking change to this column's meaning.
+ALTER TABLE attempt.artifact ADD COLUMN IF NOT EXISTS content text;

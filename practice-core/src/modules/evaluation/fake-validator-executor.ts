@@ -46,6 +46,7 @@ export class FakeValidatorExecutor implements ValidatorExecutor {
 
   async execute(
     environmentId: string,
+    _attemptId: string,
     spec: ValidatorSpec,
   ): Promise<ValidatorExecutionResult> {
     const start = Date.now();

@@ -1,11 +1,13 @@
 /**
- * Phase 1 has no auth/session layer yet -- learner identity is a stub
- * constant so the catalog/attempt UI has something concrete to call the
- * API with. Replace with real session data once an auth module exists;
- * every call site that reads these should be easy to grep for later.
+ * Learner identity is no longer a constant here -- it comes from the
+ * session JWT via `lib/session.ts` (`useSession()`), so the app calls
+ * the API as whoever the token represents. See
+ * PHASE1_MVP_COMPLETION.md §1.1 / §5.
+ *
+ * Only the course slug remains, because it is genuinely not identity:
+ * the LMS passes it per-launch as a URL param, not something carried in
+ * the token.
  */
-export const DEMO_TENANT_ID = '11111111-1111-1111-1111-111111111111';
-export const DEMO_USER_ID = '55555555-5555-5555-5555-555555555555';
 
 /**
  * This app is launched per-course from an external LMS (the LMS handles

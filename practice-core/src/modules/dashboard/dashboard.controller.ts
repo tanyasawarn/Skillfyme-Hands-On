@@ -37,7 +37,17 @@ export class DashboardController {
           'PROVISIONING',
           'READY',
           'IN_PROGRESS',
+          // SUSPENDED (15-min idle) and CACHED (stale-suspended sweep,
+          // see CacheSweepService) both stay surfaced as "continue" so
+          // clicking one reactivates it rather than it silently
+          // vanishing from Home -- revised lifecycle requirement §5/§6.
           'SUSPENDED',
+          'CACHED',
+          // Recoverable failure (revised lifecycle §5): the environment
+          // never came up, the learner didn't do anything wrong -- also
+          // resumable via the same reactivate() path, see
+          // AttemptService.REACTIVATABLE_STATUSES.
+          'PROVISION_FAILED',
         ]),
       ]);
 

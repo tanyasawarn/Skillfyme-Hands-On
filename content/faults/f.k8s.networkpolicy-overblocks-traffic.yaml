@@ -1,5 +1,15 @@
+# v2: the handler now seeds a realistic, non-empty allow-list (a
+# couple of legitimate dependencies) before omitting missing_dependency
+# from it, rather than layering an extra "block" policy on top of
+# whatever allow-rules already existed. Live-verified against a real
+# netpol-enforcing cluster: K8s NetworkPolicy has no deny primitive
+# (multiple policies selecting the same pods union their allows), so a
+# v1-style additive "block" policy can never override a pre-existing
+# allow-rule for the same target -- only an allow-list that never
+# included the dependency in the first place reproduces this symptom.
+# Added the optional known_dependencies param to params_schema.
 id: f.k8s.networkpolicy-overblocks-traffic
-version: 1
+version: 2
 title: Default-deny NetworkPolicy blocks a legitimate dependency the allow-list forgot
 summary: A zero-trust default-deny NetworkPolicy was applied, but the accompanying allow-rule forgot one legitimate service-to-service dependency.
 
@@ -23,6 +33,10 @@ params_schema:
   missing_dependency:
     type: string
     description: The service dependency the allow-list should omit.
+  known_dependencies:
+    type: string
+    description: Optional comma-separated app labels the allow-list DOES cover, simulating the rest of a real platform team's allow-list. Defaults to a couple of plausible peers.
 
 reversible: true
 min_tier: T1_SHARED_CONTAINER
+handler_implemented: true

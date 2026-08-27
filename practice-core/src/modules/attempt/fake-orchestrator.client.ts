@@ -6,6 +6,8 @@ import type {
   DestroyRequest,
   ExecShellRequest,
   ExecShellResult,
+  InjectFaultRequest,
+  InjectFaultResult,
   OrchestratorClient,
   ProvisionRequest,
   ProvisionResult,
@@ -22,8 +24,18 @@ export class FakeOrchestratorClient implements OrchestratorClient {
   private readonly logger = new Logger(FakeOrchestratorClient.name);
   private readonly fixedDelayMs: number;
 
+  // Test-controllable outcome per fault id -- mirrors
+  // FakeValidatorExecutor's override map. Defaults to
+  // applied=true/symptomVerified=true so a normal happy-path flow
+  // doesn't require every fault to be pre-configured.
+  private readonly faultOverrides = new Map<string, InjectFaultResult>();
+
   constructor(fixedDelayMs = 50) {
     this.fixedDelayMs = fixedDelayMs;
+  }
+
+  setFaultOverride(faultId: string, result: InjectFaultResult) {
+    this.faultOverrides.set(faultId, result);
   }
 
   async provision(req: ProvisionRequest): Promise<ProvisionResult> {
@@ -49,6 +61,19 @@ export class FakeOrchestratorClient implements OrchestratorClient {
       sessionToken: `fake-${randomUUID()}`,
       expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
     };
+  }
+
+  async injectFault(req: InjectFaultRequest): Promise<InjectFaultResult> {
+    this.logger.debug(
+      `[fake] injecting fault ${req.faultId} into ${req.environmentId}`,
+    );
+    await sleep(this.fixedDelayMs);
+    return (
+      this.faultOverrides.get(req.faultId) ?? {
+        applied: true,
+        symptomVerified: true,
+      }
+    );
   }
 
   async execShell(req: ExecShellRequest): Promise<ExecShellResult> {

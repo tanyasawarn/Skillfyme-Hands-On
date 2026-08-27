@@ -2,18 +2,11 @@ import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { sql, type Kysely } from 'kysely';
 import { KYSELY } from '../../db/database.module';
 import type { Database } from '../../db/schema';
+import { appendTypedEvent } from '../event-store/attempt-event-type';
 import { EventStoreRepository } from '../event-store/event-store.repository';
-
-interface ActivityHint {
-  level: number;
-  penalty: number;
-  text: string;
-}
-
-interface ActivityTaskSpec {
-  key: string;
-  hints?: ActivityHint[];
-}
+import { findOrThrow } from '../../common/find-or-throw';
+import type { ActivitySpec, ActivitySpecTask } from '../catalog/activity-spec';
+import { ActivitySpecReader } from '../../common/activity-spec-reader';
 
 export interface HintPreview {
   taskKey: string;
@@ -43,27 +36,17 @@ export class HintService {
   constructor(
     @Inject(KYSELY) private readonly db: Kysely<Database>,
     private readonly events: EventStoreRepository,
+    private readonly specReader: ActivitySpecReader,
   ) {}
 
   private async getTaskSpec(
     attemptId: string,
     taskKey: string,
-  ): Promise<ActivityTaskSpec> {
-    const attempt = await this.db
-      .selectFrom('attempt.attempt')
-      .select('activity_version_id')
-      .where('id', '=', attemptId)
-      .executeTakeFirst();
-    if (!attempt)
-      throw new BadRequestException(`attempt ${attemptId} not found`);
-
-    const version = await this.db
-      .selectFrom('content.activity_version')
-      .select('spec_jsonb')
-      .where('id', '=', attempt.activity_version_id)
-      .executeTakeFirstOrThrow();
-
-    const spec = version.spec_jsonb as { tasks?: ActivityTaskSpec[] };
+  ): Promise<ActivitySpecTask> {
+    const spec = findOrThrow(
+      await this.specReader.getActivitySpec(attemptId),
+      `attempt ${attemptId} not found`,
+    ) as Pick<ActivitySpec, 'tasks'>;
     const task = spec.tasks?.find((t) => t.key === taskKey);
     if (!task)
       throw new BadRequestException(
@@ -118,7 +101,7 @@ export class HintService {
       );
     }
 
-    await this.events.append({
+    await appendTypedEvent(this.events, {
       attemptId,
       actor: 'LEARNER',
       type: 'HINT_REQUESTED',

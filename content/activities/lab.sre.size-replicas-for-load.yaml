@@ -1,0 +1,146 @@
+id: lab.sre.size-replicas-for-load
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Configure autoscaling to survive a sustained traffic increase
+  summary: Given a target SLO and expected load, configure an HPA with correct min/max replicas and a CPU target that keeps the service healthy under sustained load.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [sre, autoscaling, capacity-planning, kubernetes]
+
+curriculum:
+  primary_topic: topic.sre.capacity-and-load
+  courses: [course.sre]
+
+skills:
+  - skill: sre.capacity-and-load
+    weight: 0.7
+    primary: true
+    bloom: apply
+  - skill: k8s.autoscaling
+    weight: 0.3
+    primary: false
+    bloom: apply
+
+prerequisites:
+  hard: [k8s.autoscaling]
+  soft: [sre.slo-error-budgets]
+
+objectives:
+  - Configure an HPA with min/max replicas sized for a stated peak load
+  - Set a CPU utilization target that leaves headroom for scale-up latency
+  - Confirm the Deployment scales up under sustained synthetic load and stays within SLO
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 30
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.checkout-deployment.v1
+  cost_budget_usd: 0.04
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Configure the HPA
+    required: true
+    instructions_md: |
+      The `checkout` Deployment currently has no autoscaling. Given an
+      expected peak of 3x baseline load, configure a
+      HorizontalPodAutoscaler targeting `checkout` with:
+      - `minReplicas: 2` (baseline availability, never scale to zero for
+        a customer-facing service)
+      - `maxReplicas: 6` (covers 3x peak with headroom)
+      - CPU utilization target of `60%` (leaves headroom for the scale-up
+        window, rather than targeting 90% and already being saturated by
+        the time new replicas become Ready)
+    validators:
+      - id: v.hpa-exists
+        type: K8S_ASSERT
+        run: "kubectl get hpa checkout -o jsonpath='{.metadata.name}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: "checkout"
+        weight: 0.3
+        severity: BLOCKING
+        on_fail: "No HPA named checkout found. kubectl autoscale deployment checkout --min=2 --max=6 --cpu-percent=60 creates one directly, or apply a HorizontalPodAutoscaler manifest."
+      - id: v.hpa-min-replicas
+        type: K8S_ASSERT
+        run: "kubectl get hpa checkout -o jsonpath='{.spec.minReplicas}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: 2
+        weight: 0.2
+        severity: BLOCKING
+        on_fail: "minReplicas should be 2 -- a customer-facing service should never scale to zero."
+      - id: v.hpa-max-replicas
+        type: K8S_ASSERT
+        run: "kubectl get hpa checkout -o jsonpath='{.spec.maxReplicas}'"
+        expect:
+          jsonpath: "$"
+          op: "eq"
+          value: 6
+        weight: 0.2
+        severity: BLOCKING
+        on_fail: "maxReplicas should be 6 -- sized for 3x baseline peak load."
+      - id: v.hpa-cpu-target-reasonable
+        type: K8S_ASSERT
+        run: "kubectl get hpa checkout -o jsonpath='{.spec.targetCPUUtilizationPercentage}'"
+        expect:
+          jsonpath: "$"
+          op: lte
+          value: 75
+        weight: 0.3
+        severity: WARN
+        on_fail: "A CPU target above 75% leaves little headroom for the scale-up window -- new replicas take time to become Ready, during which existing replicas keep absorbing load. 60% is the target this lab asks for."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "kubectl autoscale deployment checkout --min=2 --max=6 --cpu-percent=60 does this in one command."
+      - level: 2
+        penalty: 0.06
+        text: "If you'd rather write the manifest directly: apiVersion: autoscaling/v1, kind: HorizontalPodAutoscaler, spec: {scaleTargetRef: {kind: Deployment, name: checkout}, minReplicas: 2, maxReplicas: 6, targetCPUUtilizationPercentage: 60}."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.70
+      task_completion: 0.20
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.sre.size-replicas-for-load/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

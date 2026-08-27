@@ -1,0 +1,95 @@
+name: content-ci
+
+# Doc §3.5's content-CI provision/golden/null/flake/timing/cost stages.
+# The lint stage lives in ci.yml; these stages need a real k3s cluster
+# and a running orchestrator, so they run on a self-hosted runner
+# labelled `content-ci`. See:
+#   - scripts/ci/bootstrap-content-ci-runner.sh  (provision the runner)
+#   - scripts/ci/run-content-ci.sh               (the entry point below)
+#   - evaluation/content-ci/README.md            (runbook)
+#   - docs/content-ci-runner.md                  (operator procedure)
+
+on:
+  # Nightly full-library run.
+  schedule:
+    - cron: '0 3 * * *' # 03:00 UTC daily
+  # Per-PR: only when content or its solutions change -> changed activities only.
+  pull_request:
+    paths:
+      - 'content/activities/**'
+      - 'practice-core/scripts/content-ci.ts'
+      - 'scripts/ci/**'
+      - '.github/workflows/content-ci.yml'
+  # Manual: optional selector(s), comma-separated. Empty = full library.
+  workflow_dispatch:
+    inputs:
+      selectors:
+        description: 'Activity selector(s), comma-separated (empty = full library)'
+        required: false
+        default: ''
+
+concurrency:
+  # One content-ci run at a time on the single runner; a newer push to a
+  # PR cancels the older run for that PR, but never cancels the nightly.
+  group: content-ci-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  content-ci:
+    name: content-ci (provision + golden/null/flake/timing/cost)
+    runs-on: [self-hosted, content-ci]
+    timeout-minutes: 120
+    env:
+      DATABASE_URL: postgres://practice:practice@localhost:5432/practice_engine
+      REDIS_URL: redis://localhost:6379
+      NATS_URL: nats://localhost:4222
+      ORCHESTRATOR_GRPC_ADDRESS: localhost:50051
+      ORCHESTRATOR_SHARED_SECRET: ${{ secrets.ORCHESTRATOR_SHARED_SECRET }}
+      CI_FLAKE_RUNS: '5'
+      CI_BUDGET_USD: '0.08'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # changed-activities.sh needs the merge base
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: practice-core/package-lock.json
+
+      - name: Install practice-core deps
+        working-directory: practice-core
+        run: npm ci
+
+      - name: Preflight — orchestrator reachable
+        run: |
+          for i in $(seq 1 15); do
+            if nc -z localhost 50051; then echo "orchestrator up"; exit 0; fi
+            sleep 2
+          done
+          echo "::error::orchestrator not reachable on localhost:50051 -- is content-ci-orchestrator.service running on this runner? See docs/content-ci-runner.md"
+          exit 1
+
+      - name: Determine selectors
+        id: sel
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            mapfile -t ids < <(bash scripts/ci/changed-activities.sh "origin/${{ github.base_ref }}")
+            if [ "${#ids[@]}" -eq 0 ]; then
+              echo "no content activities changed in this PR -- nothing for content-ci to run"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "selectors=$(IFS=,; echo "${ids[*]}")" >> "$GITHUB_OUTPUT"
+            fi
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "selectors=${{ github.event.inputs.selectors }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "selectors=" >> "$GITHUB_OUTPUT" # schedule -> full library
+          fi
+
+      - name: Run content-ci
+        if: steps.sel.outputs.skip != 'true'
+        run: |
+          # shellcheck disable=SC2086
+          bash scripts/ci/run-content-ci.sh ${{ steps.sel.outputs.selectors }}

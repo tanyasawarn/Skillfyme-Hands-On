@@ -1,8 +1,40 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { sql, type Kysely } from 'kysely';
-import { KYSELY } from '../../db/database.module';
-import type { Database, EventActor } from '../../db/schema';
+import { Injectable } from '@nestjs/common';
+import { sql } from 'kysely';
+import type { EventActor } from '../../db/schema';
+import { BaseRepository } from '../../common/base.repository';
 
+// PLAN.md Phase 3's K8: this repository itself stays a generic,
+// infrastructure-layer append-only event log (`type: string`) -- doc
+// §4.2's own framing: "the single most valuable observability
+// decision... build this on day one," not "this stores only these 29
+// specific business event types." Its own integration test exercises
+// seq/ordering/advisory-lock mechanics with arbitrary type strings ('A',
+// 'B', `EVT_${n}`) deliberately decoupled from any real business
+// taxonomy.
+//
+// A first attempt at K8 tried a generic type parameter with a DEFAULT
+// (`type: T = AttemptEventType`) on this interface, on the theory that
+// callers not specifying T would get the narrower default. That does
+// not work -- confirmed with a deliberate typo test
+// ('ATTEMPT_CREATD') that a naive generic-default design silently
+// accepted with zero compile error: TypeScript infers T from the
+// argument's own literal type when inference succeeds, and a default
+// only applies when inference is IMPOSSIBLE, so the default never
+// actually constrained anything real callers wrote. Switching to a
+// constrained generic (`T extends AttemptEventType = AttemptEventType`)
+// does correctly reject the typo, but then also rejects this file's own
+// `<string>` test instantiations (string is not a subtype of the
+// narrower union) -- the two goals (repository fully generic + real
+// callers strictly checked) cannot both be satisfied by one shared
+// generic parameter on the same interface.
+//
+// The actual fix: real business-event callers use appendTyped()
+// (below), a thin wrapper whose parameter type is a real,
+// non-optional, non-generic AttemptEventType -- genuine compile-time
+// checking with no ambiguity, no default to be silently bypassed. This
+// generic append() stays available for exactly this file's own
+// ordering/concurrency tests and nothing else should call it directly
+// for a real business event.
 export interface AppendEventInput {
   attemptId: string;
   actor: EventActor;
@@ -31,9 +63,7 @@ export interface AttemptEventRow {
  * duplicated across call sites.
  */
 @Injectable()
-export class EventStoreRepository {
-  constructor(@Inject(KYSELY) private readonly db: Kysely<Database>) {}
-
+export class EventStoreRepository extends BaseRepository {
   /**
    * Appends one event, assigning seq = max(seq)+1 for the attempt.
    * Concurrent appends to the *same* attempt_id (e.g. Session Broker and

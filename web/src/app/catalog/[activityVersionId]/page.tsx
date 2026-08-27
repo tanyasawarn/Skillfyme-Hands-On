@@ -1,10 +1,20 @@
 'use client';
 
 import { use, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api-client';
-import { DEMO_TENANT_ID, DEMO_USER_ID } from '@/lib/demo-context';
+import { useActivityVersion } from '@/lib/use-activity-version';
+import { useSession } from '@/lib/session';
+import { toUserFacingError } from '@/lib/error-message';
+import { formatCurrency, formatMode } from '@/lib/format';
+import { Button } from '@/components/ui/Button';
+import { Loader } from '@/components/ui/Loader';
+import { Alert } from '@/components/ui/Alert';
+import { PageContainer } from '@/components/ui/PageContainer';
+import { SectionLabel } from '@/components/ui/SectionLabel';
+import { attemptRoute } from '@/lib/routes';
+import { makeIdempotencyKey } from '@/lib/idempotency';
 
 export default function ActivityDetailPage({
   params,
@@ -15,16 +25,15 @@ export default function ActivityDetailPage({
   const router = useRouter();
   const [startError, setStartError] = useState<string | null>(null);
 
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ['activity-version', activityVersionId],
-    queryFn: () => api.getActivityVersion(activityVersionId),
-  });
+  const { data, isLoading, isError } = useActivityVersion(activityVersionId);
+  const session = useSession();
 
   const startMutation = useMutation({
     mutationFn: async () => {
-      const idempotencyKey = `web-start-${activityVersionId}-${Date.now()}`;
+      if (!session) throw new Error('session not ready');
+      const idempotencyKey = makeIdempotencyKey(`start-${activityVersionId}`);
       const created = await api.createAttempt(
-        { tenant_id: DEMO_TENANT_ID, user_id: DEMO_USER_ID, activity_version_id: activityVersionId },
+        { tenant_id: session.tenantId, user_id: session.userId, activity_version_id: activityVersionId },
         idempotencyKey,
       );
       // Doc §4.1 steps 16-22: create then provision are separate calls
@@ -33,24 +42,30 @@ export default function ActivityDetailPage({
       await api.provisionAttempt(created.id);
       return created.id;
     },
-    onSuccess: (attemptId) => router.push(`/attempts/${attemptId}`),
-    onError: (err) => setStartError(String(err)),
+    onSuccess: (attemptId) => router.push(attemptRoute(attemptId)),
+    onError: (err) => setStartError(toUserFacingError(err).headline),
   });
 
-  if (isLoading) return <div className="mx-auto max-w-3xl px-6 py-10 text-[var(--ink-muted)]">Loading…</div>;
+  if (isLoading) {
+    return (
+      <PageContainer spacing="py-10">
+        <Loader label="Loading…" />
+      </PageContainer>
+    );
+  }
   if (isError || !data) {
     return (
-      <div className="mx-auto max-w-3xl px-6 py-10 text-[var(--danger)]">
-        Could not load this activity. It may not be published, or practice-core isn&apos;t running.
-      </div>
+      <PageContainer spacing="py-10">
+        <Alert>Could not load this activity. It may not be published, or practice-core isn&apos;t running.</Alert>
+      </PageContainer>
     );
   }
 
   const spec = data.spec_jsonb ?? {};
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10">
-      <p className="font-mono-label">{data.mode.replace('_', ' ')}</p>
+    <PageContainer spacing="py-10">
+      <SectionLabel as="p">{formatMode(data.mode)}</SectionLabel>
       <h1 className="font-display mt-1 text-2xl font-extrabold">{spec.meta?.title ?? data.slug}</h1>
       {spec.meta?.summary && <p className="mt-3 text-[var(--ink-muted)]">{spec.meta.summary}</p>}
 
@@ -59,12 +74,12 @@ export default function ActivityDetailPage({
         <span>·</span>
         <span>{data.estimated_minutes ? `~${data.estimated_minutes} min` : 'duration unknown'}</span>
         <span>·</span>
-        <span>${data.cost_budget_usd ? Number(data.cost_budget_usd).toFixed(2) : '?'} est. cost</span>
+        <span>{data.cost_budget_usd ? formatCurrency(Number(data.cost_budget_usd)) : '$?'} est. cost</span>
       </div>
 
       {spec.objectives && spec.objectives.length > 0 && (
         <div className="mt-8">
-          <h2 className="font-mono-label">Objectives</h2>
+          <SectionLabel>Objectives</SectionLabel>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[var(--ink-muted)]">
             {spec.objectives.map((obj, i) => (
               <li key={i}>{obj}</li>
@@ -75,7 +90,7 @@ export default function ActivityDetailPage({
 
       {spec.tasks && spec.tasks.length > 0 && (
         <div className="mt-8">
-          <h2 className="font-mono-label">Tasks</h2>
+          <SectionLabel>Tasks</SectionLabel>
           <ol className="mt-2 space-y-1 text-sm text-[var(--ink-muted)]">
             {spec.tasks.map((task) => (
               <li key={task.key}>
@@ -87,22 +102,22 @@ export default function ActivityDetailPage({
         </div>
       )}
 
-      <button
+      <Button
         onClick={() => {
           setStartError(null);
           startMutation.mutate();
         }}
-        disabled={startMutation.isPending}
-        className="lms-action-btn lms-action-btn--primary mt-10"
+        disabled={startMutation.isPending || !session}
+        className="mt-10"
       >
         {startMutation.isPending ? 'Starting…' : 'Start attempt'}
-      </button>
+      </Button>
 
       {startError && (
         <p className="mt-3 text-sm text-[var(--danger)]">
           Could not start: {startError}
         </p>
       )}
-    </div>
+    </PageContainer>
   );
 }

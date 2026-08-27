@@ -81,6 +81,37 @@ export class ScoringEngineService {
       penalties.retries = retryPenalty;
       totalPenalty += retryPenalty;
     }
+    if (profile.penalties?.blastRadius) {
+      // Doc §3.3: "A learner who fixes the 502 by deleting the namespace
+      // and redeploying from scratch technically restores service and
+      // should not score well" -- this is the mechanism that makes that
+      // true regardless of how well every other criterion scores.
+      const blastRadiusPenalty = Math.min(
+        input.blastRadiusViolations *
+          profile.penalties.blastRadius.perViolation,
+        profile.penalties.blastRadius.cap,
+      );
+      penalties.blast_radius = blastRadiusPenalty;
+      totalPenalty += blastRadiusPenalty;
+    }
+    if (profile.penalties?.overtime) {
+      // Doc §6.4: "overtime: {per_10min_over: 0.02, cap: 0.10}" -- a
+      // production incident that takes meaningfully longer than
+      // estimated_minutes costs real (simulated) business impact, on
+      // top of whatever efficiency already reflects; distinct penalty,
+      // not a duplicate of the efficiency criterion, which caps out at
+      // 0 rather than continuing to subtract.
+      const overMinutes = Math.max(
+        0,
+        input.activeMinutes - input.estimatedMinutes,
+      );
+      const overtimePenalty = Math.min(
+        Math.floor(overMinutes / 10) * profile.penalties.overtime.per10MinOver,
+        profile.penalties.overtime.cap,
+      );
+      penalties.overtime = overtimePenalty;
+      totalPenalty += overtimePenalty;
+    }
 
     const bonuses: Record<string, number> = {};
     let totalBonus = 0;

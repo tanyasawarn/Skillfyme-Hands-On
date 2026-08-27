@@ -1,0 +1,139 @@
+id: lab.sre.define-slo-error-budget
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Define an SLO and compute its error budget
+  summary: Write a Prometheus recording rule for a 99% availability SLO and compute the remaining error budget from real query results.
+  difficulty_level: L2
+  estimated_minutes: 25
+  locale: en
+  authors: [content-team]
+  tags: [sre, slo, prometheus]
+
+curriculum:
+  primary_topic: topic.sre.slo-error-budgets
+  courses: [course.sre]
+
+skills:
+  - skill: sre.slo-error-budgets
+    weight: 0.8
+    primary: true
+    bloom: apply
+  - skill: observability.alerting
+    weight: 0.2
+    primary: false
+    bloom: understand
+
+prerequisites:
+  hard: [observability.alerting]
+  soft: []
+
+objectives:
+  - Write a Prometheus recording rule computing a rolling success-rate SLI
+  - Compute an error budget from a target SLO and observed SLI
+  - Explain what "budget burn rate" means for deploy-risk decisions
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 30
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.prometheus-alertmanager-installed.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Write the SLI recording rule
+    required: true
+    instructions_md: |
+      Add a Prometheus recording rule named `sli:checkout_success_rate:ratio_rate5m`
+      that computes the ratio of successful (`status!~"5.."`) to total
+      requests to the `checkout` service over a 5-minute rolling window.
+    validators:
+      - id: v.recording-rule-exists
+        type: SHELL_ASSERT
+        run: "curl -sf localhost:9090/api/v1/rules | grep -q 'sli:checkout_success_rate:ratio_rate5m'"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "The recording rule sli:checkout_success_rate:ratio_rate5m isn't showing up in Prometheus yet. Check the rule group syntax and that Prometheus reloaded its config."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "A recording rule needs `record: <name>` and `expr: <PromQL>` inside a rule group, same shape as an alert rule but with `record` instead of `alert`."
+      - level: 2
+        penalty: 0.06
+        text: "expr: sum(rate(http_requests_total{service=\"checkout\",status!~\"5..\"}[5m])) / sum(rate(http_requests_total{service=\"checkout\"}[5m]))"
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: Compute the error budget
+    required: true
+    instructions_md: |
+      Given a 99% SLO target and your recording rule's current SLI
+      value, write the error budget calculation to
+      `/workspace/error-budget.txt` as a single number: the fraction of
+      the budget remaining (e.g. `0.42` means 42% of the allowed error
+      budget is left this period).
+
+      Formula: `budget_remaining = 1 - ((1 - SLI) / (1 - SLO))`, clamped
+      to `[0, 1]`.
+    validators:
+      - id: v.error-budget-file-valid
+        type: SHELL_ASSERT
+        run: "awk '{exit !($1 >= 0 && $1 <= 1 && $1 ~ /^[01](\\.[0-9]+)?$/)}' /workspace/error-budget.txt"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "error-budget.txt should contain a single number between 0 and 1 (the fraction of error budget remaining), nothing else."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "Query the recording rule's current value first: curl -sf 'localhost:9090/api/v1/query?query=sli:checkout_success_rate:ratio_rate5m'"
+      - level: 2
+        penalty: 0.08
+        text: "If SLI=0.995 and SLO=0.99: (1-0.995)/(1-0.99) = 0.5, so budget_remaining = 1 - 0.5 = 0.5."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.75
+      task_completion: 0.15
+      efficiency: 0.10
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.sre.define-slo-error-budget/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

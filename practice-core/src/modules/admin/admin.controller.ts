@@ -15,7 +15,9 @@ import type { Kysely } from 'kysely';
 import type { ActivityVersionStatus, Database } from '../../db/schema';
 import { AuthUser } from '../auth/auth-user.decorator';
 import type { AuthClaims } from '../auth/auth.types';
+import { Role } from '../auth/role';
 import { Roles } from '../auth/roles.decorator';
+import type { ActivitySpec } from '../catalog/activity-spec';
 
 /**
  * Doc §3.7: "Web CMS... Guided forms, task builder, validator picker,
@@ -51,7 +53,7 @@ import { Roles } from '../auth/roles.decorator';
  * "literal-segment:action" variant, which is just as broken.
  */
 @Controller('v1/admin')
-@Roles('admin', 'author')
+@Roles(Role.ADMIN, Role.AUTHOR)
 export class AdminController {
   constructor(
     private readonly analytics: AnalyticsService,
@@ -127,7 +129,7 @@ export class AdminController {
    * convention.
    */
   @Post('activity-versions/:id/review-decision')
-  @Roles('admin')
+  @Roles(Role.ADMIN)
   async reviewDecision(
     @AuthUser() auth: AuthClaims,
     @Param('id') id: string,
@@ -145,7 +147,7 @@ export class AdminController {
 
   /** Doc §3.7 step 4: publish an already-approved version. Also 'admin'-only for the same separation-of-duties reason. */
   @Post('activity-versions/:id/publish')
-  @Roles('admin')
+  @Roles(Role.ADMIN)
   async publishApprovedVersion(
     @AuthUser() auth: AuthClaims,
     @Param('id') id: string,
@@ -158,21 +160,13 @@ export class AdminController {
     );
   }
 
-  private async lintAndParse(yaml: string) {
-    const spec = this.lint.parseYaml(yaml) as {
-      id: string;
-      version: number;
-      mode: 'GUIDED_LAB' | 'PRODUCTION_SIM' | 'PROJECT';
-      meta: { difficulty_level: string; estimated_minutes: number };
-      environment: { blueprint: string; cost_budget_usd: number };
-      skills: Array<{
-        skill: string;
-        weight: number;
-        primary: boolean;
-        bloom?: string;
-      }>;
-      curriculum?: { primary_topic?: string; also_relevant?: string[] };
-    };
+  private async lintAndParse(yaml: string): Promise<ActivitySpec> {
+    // Asserted before result.valid is checked below -- real shape isn't
+    // guaranteed until lint() confirms it against
+    // contracts/activity_spec.schema.json, but lint() itself needs a
+    // structurally-typed object to call .skills/.meta etc on, same as
+    // before this migration to the canonical ActivitySpec type (K10).
+    const spec = this.lint.parseYaml(yaml) as ActivitySpec;
 
     const skills = await this.db
       .selectFrom('skill.skill')

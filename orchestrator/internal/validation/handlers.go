@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"k8s.io/client-go/util/jsonpath"
 	"sigs.k8s.io/yaml"
@@ -19,7 +20,7 @@ import (
 func execShellAssert(ctx context.Context, provisioner *k8s.Provisioner, req Request) (Result, error) {
 	out, err := execInPod(ctx, provisioner, req.EnvironmentID, req.Run)
 	if err != nil {
-		return Result{Status: "ERROR"}, err
+		return Result{Status: StatusError}, err
 	}
 
 	wantCode, _ := req.Expect["exit_code"].(float64) // JSON numbers decode as float64
@@ -31,9 +32,9 @@ func execShellAssert(ctx context.Context, provisioner *k8s.Provisioner, req Requ
 		}
 	}
 
-	status := "FAIL"
+	status := StatusFail
 	if pass {
-		status = "PASS"
+		status = StatusPass
 	}
 	return Result{Status: status, Observed: map[string]any{"exit_code": out.ExitCode, "stdout": truncate(out.Stdout, 2000)}}, nil
 }
@@ -44,10 +45,10 @@ func execShellAssert(ctx context.Context, provisioner *k8s.Provisioner, req Requ
 func execShellJSON(ctx context.Context, provisioner *k8s.Provisioner, req Request) (Result, error) {
 	out, err := execInPod(ctx, provisioner, req.EnvironmentID, req.Run)
 	if err != nil {
-		return Result{Status: "ERROR"}, err
+		return Result{Status: StatusError}, err
 	}
 	if out.ExitCode != 0 {
-		return Result{Status: "FAIL", Observed: map[string]any{"exit_code": out.ExitCode, "stdout": truncate(out.Stdout, 2000)}}, nil
+		return Result{Status: StatusFail, Observed: map[string]any{"exit_code": out.ExitCode, "stdout": truncate(out.Stdout, 2000)}}, nil
 	}
 
 	var doc any
@@ -61,17 +62,17 @@ func execShellJSON(ctx context.Context, provisioner *k8s.Provisioner, req Reques
 
 	observed, jpErr := evalJSONPath(doc, req.Expect["jsonpath"])
 	if jpErr != nil {
-		return Result{Status: "ERROR"}, jpErr
+		return Result{Status: StatusError}, jpErr
 	}
 
 	pass, err := compareOp(observed, req.Expect["op"], req.Expect["value"])
 	if err != nil {
-		return Result{Status: "ERROR"}, err
+		return Result{Status: StatusError}, err
 	}
 
-	status := "FAIL"
+	status := StatusFail
 	if pass {
-		status = "PASS"
+		status = StatusPass
 	}
 	return Result{Status: status, Observed: observed}, nil
 }
@@ -81,14 +82,14 @@ func execShellJSON(ctx context.Context, provisioner *k8s.Provisioner, req Reques
 func execFileExists(ctx context.Context, provisioner *k8s.Provisioner, req Request) (Result, error) {
 	out, err := execInPod(ctx, provisioner, req.EnvironmentID, fmt.Sprintf("test -e %s", shellQuote(req.Run)))
 	if err != nil {
-		return Result{Status: "ERROR"}, err
+		return Result{Status: StatusError}, err
 	}
 	exists := out.ExitCode == 0
 	wantExists, _ := req.Expect["exists"].(bool)
 
-	status := "FAIL"
+	status := StatusFail
 	if exists == wantExists {
-		status = "PASS"
+		status = StatusPass
 	}
 	return Result{Status: status, Observed: map[string]any{"exists": exists}}, nil
 }
@@ -98,10 +99,10 @@ func execFileExists(ctx context.Context, provisioner *k8s.Provisioner, req Reque
 func execFileContent(ctx context.Context, provisioner *k8s.Provisioner, req Request) (Result, error) {
 	out, err := execInPod(ctx, provisioner, req.EnvironmentID, fmt.Sprintf("cat %s", shellQuote(req.Run)))
 	if err != nil {
-		return Result{Status: "ERROR"}, err
+		return Result{Status: StatusError}, err
 	}
 	if out.ExitCode != 0 {
-		return Result{Status: "FAIL", Observed: map[string]any{"error": "file not readable", "stderr": truncate(out.Stderr, 500)}}, nil
+		return Result{Status: StatusFail, Observed: map[string]any{"error": "file not readable", "stderr": truncate(out.Stderr, 500)}}, nil
 	}
 
 	pass := true
@@ -118,9 +119,9 @@ func execFileContent(ctx context.Context, provisioner *k8s.Provisioner, req Requ
 		}
 	}
 
-	status := "FAIL"
+	status := StatusFail
 	if pass {
-		status = "PASS"
+		status = StatusPass
 	}
 	return Result{Status: status, Observed: map[string]any{"content_preview": truncate(out.Stdout, 500)}}, nil
 }
@@ -130,10 +131,10 @@ func execFileContent(ctx context.Context, provisioner *k8s.Provisioner, req Requ
 func execFileParse(ctx context.Context, provisioner *k8s.Provisioner, req Request) (Result, error) {
 	out, err := execInPod(ctx, provisioner, req.EnvironmentID, fmt.Sprintf("cat %s", shellQuote(req.Run)))
 	if err != nil {
-		return Result{Status: "ERROR"}, err
+		return Result{Status: StatusError}, err
 	}
 	if out.ExitCode != 0 {
-		return Result{Status: "FAIL", Observed: map[string]any{"error": "file not readable"}}, nil
+		return Result{Status: StatusFail, Observed: map[string]any{"error": "file not readable"}}, nil
 	}
 
 	format, _ := req.Expect["format"].(string)
@@ -148,13 +149,154 @@ func execFileParse(ctx context.Context, provisioner *k8s.Provisioner, req Reques
 		// real YAML syntax rather than just "did json.Unmarshal accept it".
 		parseErr = yaml.Unmarshal([]byte(out.Stdout), &v)
 	default:
-		return Result{Status: "ERROR"}, fmt.Errorf("unsupported FILE_PARSE format %q", format)
+		return Result{Status: StatusError}, fmt.Errorf("unsupported FILE_PARSE format %q", format)
 	}
 
 	if parseErr != nil {
-		return Result{Status: "FAIL", Observed: map[string]any{"parse_error": parseErr.Error()}}, nil
+		return Result{Status: StatusFail, Observed: map[string]any{"parse_error": parseErr.Error()}}, nil
 	}
-	return Result{Status: "PASS", Observed: map[string]any{"format": format, "valid": true}}, nil
+	return Result{Status: StatusPass, Observed: map[string]any{"format": format, "valid": true}}, nil
+}
+
+// --- HTTP_SLO --------------------------------------------------------------
+// run: target URL. expect: {success_rate_min: number, window_s?: number,
+// sample_interval_s?: number}. Doc §3.3 worked example / §11.3 table:
+// "success rate over N seconds under load" -- the "under load" half (a
+// dedicated load generator hitting the service concurrently, doc's
+// "Load generator" execution source) is a separate mechanism this
+// package doesn't implement; what's here is the real, honest subset:
+// repeated in-network sampling of the URL from inside the learner's own
+// pod (same NetworkPolicy the learner's own curl would be bound by, so
+// this measures what the learner's environment can actually reach, not
+// an orchestrator-side bypass of their network boundary), computing a
+// real success rate over the window. A learner debugging a genuinely
+// intermittent 502 (doc's own worked incident) gets a real signal from
+// this; validating behavior specifically under concurrent load traffic
+// is the scoped-out half.
+const (
+	httpSLODefaultWindowSeconds  = 30 // capped well under window_s:180's doc example -- see doc comment above
+	httpSLOMaxWindowSeconds      = 60
+	httpSLOSampleIntervalSeconds = 2
+)
+
+func execHTTPSLO(ctx context.Context, provisioner *k8s.Provisioner, req Request) (Result, error) {
+	url := req.Run
+	if url == "" {
+		return Result{Status: StatusError}, fmt.Errorf("HTTP_SLO requires run to be the target URL")
+	}
+	successRateMin, err := toFloat(req.Expect["success_rate_min"])
+	if err != nil {
+		return Result{Status: StatusError}, fmt.Errorf("HTTP_SLO requires expect.success_rate_min: %w", err)
+	}
+
+	requestedWindowSeconds := httpSLODefaultWindowSeconds
+	if w, ok := req.Expect["window_s"]; ok {
+		wf, err := toFloat(w)
+		if err != nil {
+			return Result{Status: StatusError}, fmt.Errorf("invalid expect.window_s: %w", err)
+		}
+		requestedWindowSeconds = int(wf)
+	}
+
+	var ctxRemainingSeconds int
+	hasDeadline := false
+	if deadline, ok := ctx.Deadline(); ok {
+		ctxRemainingSeconds = int(time.Until(deadline).Seconds())
+		hasDeadline = true
+	}
+	windowSeconds := clampHTTPSLOWindow(requestedWindowSeconds, ctxRemainingSeconds, hasDeadline)
+	sampleCount := windowSeconds / httpSLOSampleIntervalSeconds
+	if sampleCount < 1 {
+		sampleCount = 1
+	}
+
+	// One exec call samples the whole window internally (a loop inside
+	// the pod), not N separate execInPod calls -- each execInPod is its
+	// own SPDY exec session, expensive enough that N of them would both
+	// be slow and make "every 2s" timing unreliable (session setup
+	// latency would dominate). curl -s -o /dev/null -w '%{http_code}'
+	// prints just the status code (000 on a connection failure, which
+	// correctly fails the >=200 <400 success check below rather than
+	// crashing the script).
+	script := fmt.Sprintf(
+		`for i in $(seq 1 %d); do curl -s -o /dev/null -w '%%{http_code}\n' --max-time 5 %s; sleep %d; done`,
+		sampleCount, shellQuote(url), httpSLOSampleIntervalSeconds,
+	)
+
+	out, err := execInPod(ctx, provisioner, req.EnvironmentID, script)
+	if err != nil {
+		return Result{Status: StatusError}, err
+	}
+
+	total, success := parseHTTPSLOSamples(out.Stdout)
+	if total == 0 {
+		return Result{Status: StatusError, Observed: map[string]any{"error": "no samples collected"}}, nil
+	}
+
+	observedRate := float64(success) / float64(total)
+	status := StatusFail
+	if observedRate >= successRateMin {
+		status = StatusPass
+	}
+	return Result{
+		Status: status,
+		Observed: map[string]any{
+			"success_rate":       observedRate,
+			"samples":            total,
+			"successes":          success,
+			"window_s_requested": requestedWindowSeconds,
+			"window_s_used":      windowSeconds,
+		},
+	}, nil
+}
+
+// clampHTTPSLOWindow bounds a requested HTTP_SLO window to what's
+// actually safe to run in one exec call: never more than
+// httpSLOMaxWindowSeconds (doc's own window_s:180 example blocking a
+// single gRPC call for 3 minutes is a bad shape for this RPC -- see
+// execHTTPSLO's doc comment), and never more than the caller's real
+// remaining context deadline minus a small setup/teardown headroom (so
+// the sampling script finishes before the outer context cancels it
+// mid-curl, rather than the whole exec failing with a generic timeout
+// error instead of a clean, explained result). Always at least one full
+// sample interval.
+func clampHTTPSLOWindow(requestedSeconds, ctxRemainingSeconds int, hasDeadline bool) int {
+	window := requestedSeconds
+	if window > httpSLOMaxWindowSeconds {
+		window = httpSLOMaxWindowSeconds
+	}
+	if hasDeadline {
+		const teardownHeadroomSeconds = 3
+		budget := ctxRemainingSeconds - teardownHeadroomSeconds
+		if budget < window {
+			window = budget
+		}
+	}
+	if window < httpSLOSampleIntervalSeconds {
+		window = httpSLOSampleIntervalSeconds
+	}
+	return window
+}
+
+// parseHTTPSLOSamples parses execHTTPSLO's sampling script output: one
+// HTTP status code per line ("000" on a connection failure/timeout).
+// Blank lines are ignored (trailing newline, or curl producing no output
+// on some early-abort paths); a line that isn't a parseable status code
+// counts toward total but not success, same treatment as an explicit
+// failure code -- a corrupted sample line is honest evidence of
+// something going wrong, not grounds to silently drop it from the ratio.
+func parseHTTPSLOSamples(stdout string) (total, success int) {
+	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		total++
+		if code, err := strconv.Atoi(line); err == nil && code >= 200 && code < 400 {
+			success++
+		}
+	}
+	return total, success
 }
 
 // --- K8S_ASSERT ----------------------------------------------------------
@@ -170,28 +312,28 @@ func execFileParse(ctx context.Context, provisioner *k8s.Provisioner, req Reques
 func execK8sAssert(ctx context.Context, provisioner *k8s.Provisioner, req Request) (Result, error) {
 	parsed, err := parseKubectlCommand(req.Run)
 	if err != nil {
-		return Result{Status: "ERROR"}, err
+		return Result{Status: StatusError}, err
 	}
 
 	ns := k8s.NamespaceForEnv(req.EnvironmentID)
 	obj, err := fetchResourceAsMap(ctx, provisioner, ns, parsed)
 	if err != nil {
-		return Result{Status: "FAIL", Observed: map[string]any{"error": err.Error()}}, nil
+		return Result{Status: StatusFail, Observed: map[string]any{"error": err.Error()}}, nil
 	}
 
 	observed, jpErr := evalJSONPath(obj, req.Expect["jsonpath"])
 	if jpErr != nil {
-		return Result{Status: "ERROR"}, jpErr
+		return Result{Status: StatusError}, jpErr
 	}
 
 	pass, err := compareOp(observed, req.Expect["op"], req.Expect["value"])
 	if err != nil {
-		return Result{Status: "ERROR"}, err
+		return Result{Status: StatusError}, err
 	}
 
-	status := "FAIL"
+	status := StatusFail
 	if pass {
-		status = "PASS"
+		status = StatusPass
 	}
 	return Result{Status: status, Observed: observed}, nil
 }

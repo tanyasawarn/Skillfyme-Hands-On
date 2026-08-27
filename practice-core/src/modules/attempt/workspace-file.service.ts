@@ -1,5 +1,7 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { AttemptRepository } from './attempt.repository';
+import { findOrThrow } from '../../common/find-or-throw';
+import { TimeoutConstants } from '../../common/constants';
 import {
   ORCHESTRATOR_CLIENT,
   type OrchestratorClient,
@@ -58,7 +60,8 @@ export class WorkspaceFileService {
     const result = await this.orchestrator.execShell({
       environmentId,
       command,
-      timeoutMs: 10_000,
+      timeoutMs: TimeoutConstants.WORKSPACE_FILE_OP_MS,
+      attemptId,
     });
     if (result.errorMessage) {
       throw new BadRequestException(
@@ -91,7 +94,8 @@ export class WorkspaceFileService {
     const result = await this.orchestrator.execShell({
       environmentId,
       command: `base64 "${path}" 2>&1`,
-      timeoutMs: 10_000,
+      timeoutMs: TimeoutConstants.WORKSPACE_FILE_OP_MS,
+      attemptId,
     });
     if (result.errorMessage) {
       throw new BadRequestException(
@@ -128,7 +132,8 @@ export class WorkspaceFileService {
     const result = await this.orchestrator.execShell({
       environmentId,
       command,
-      timeoutMs: 10_000,
+      timeoutMs: TimeoutConstants.WORKSPACE_FILE_OP_MS,
+      attemptId,
     });
     if (result.errorMessage) {
       throw new BadRequestException(
@@ -143,9 +148,10 @@ export class WorkspaceFileService {
   }
 
   private async environmentIdFor(attemptId: string): Promise<string> {
-    const attempt = await this.attempts.findById(attemptId);
-    if (!attempt)
-      throw new BadRequestException(`attempt ${attemptId} not found`);
+    const attempt = findOrThrow(
+      await this.attempts.findById(attemptId),
+      `attempt ${attemptId} not found`,
+    );
     if (!attempt.environment_id) {
       throw new BadRequestException(
         `attempt ${attemptId} has no environment (status ${attempt.status})`,

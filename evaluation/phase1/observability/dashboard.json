@@ -1,0 +1,154 @@
+{
+  "__comment": "Grafana dashboard for the Phase 1 MVP exit criteria (doc §13.1). Import via Dashboards -> Import -> Upload JSON. Expects a Prometheus datasource. Panels map 1:1 to PHASE1_MVP_COMPLETION.md §7.",
+  "title": "Phase 1 MVP — Exit Criteria",
+  "uid": "phase1-exit-criteria",
+  "schemaVersion": 39,
+  "editable": true,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Time-to-ready p95 (SLO ≤ 20s)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 20 } ] }
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(orchestrator_provision_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(orchestrator_provision_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Provision success rate (SLO ≥ 99%)",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0.9,
+          "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 0.99 } ] }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(orchestrator_provision_total{result=\"success\"}[1h])) / sum(rate(orchestrator_provision_total[1h]))",
+          "legendFormat": "success rate"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Validator ERROR rate (SLO < 0.5%)",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 0.005 } ] }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(practice_core_validator_result_total{status=\"ERROR\"}[1h])) / clamp_min(sum(rate(practice_core_validator_result_total[1h])), 0.001)",
+          "legendFormat": "error rate"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cost per attempt (SLO < $0.08)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 0.08 } ] }
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.90, sum(rate(orchestrator_attempt_cost_usd_bucket[1h])) by (le))",
+          "legendFormat": "p90"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(orchestrator_attempt_cost_usd_bucket[1h])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "sum(rate(orchestrator_attempt_cost_usd_sum[1h])) / clamp_min(sum(rate(orchestrator_attempt_cost_usd_count[1h])), 0.001)",
+          "legendFormat": "mean"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Orphan environments found (1h) — must be 0",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }
+        }
+      },
+      "targets": [ { "expr": "increase(orchestrator_reaper_orphans_found_total[1h])" } ]
+    },
+    {
+      "type": "stat",
+      "title": "Active learners (proxy: distinct in-progress attempts)",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "description": "Load-test target: ≥ 200. Proxy = active WS sessions; cross-check against the load harness's own concurrency counter.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 200 } ] }
+        }
+      },
+      "targets": [ { "expr": "orchestrator_ws_sessions_active" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Provision throughput by result",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        { "expr": "sum(rate(orchestrator_provision_total[5m])) by (result)", "legendFormat": "{{result}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Warm-pool depth and hit/miss",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        { "expr": "orchestrator_warm_pool_depth", "legendFormat": "depth {{blueprint}}" },
+        { "expr": "sum(rate(orchestrator_warm_pool_claim_total[5m])) by (result)", "legendFormat": "claim {{result}}/s" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Teardown reasons (reaper / idle / budget)",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 23 },
+      "targets": [
+        { "expr": "sum(rate(orchestrator_reaper_destroyed_total[15m])) by (reason)", "legendFormat": "reaper {{reason}}" },
+        { "expr": "rate(orchestrator_idle_destroyed_total[15m])", "legendFormat": "idle" },
+        { "expr": "sum(rate(orchestrator_budget_action_total[15m])) by (tier)", "legendFormat": "budget {{tier}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Attempt state transitions",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 23 },
+      "targets": [
+        { "expr": "sum(rate(practice_core_attempt_transition_total[5m])) by (to)", "legendFormat": "{{to}}" }
+      ]
+    }
+  ]
+}

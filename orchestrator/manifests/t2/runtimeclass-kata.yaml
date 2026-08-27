@@ -1,0 +1,53 @@
+# Doc §5.1: "T2 | Isolated microVM | Firecracker/Kata microVM or
+# dedicated node-per-tenant". Doc §5.2's alternatives-considered note
+# names the actual choice explicitly: "Kata Containers (stronger,
+# heavier, slower start -- chosen for T2 instead)" of gVisor. Kata is
+# itself a Kubernetes RuntimeClass shim (kata-runtime) that launches each
+# pod's containers inside a Firecracker (or QEMU/cloud-hypervisor)
+# microVM rather than a shared-kernel namespace -- this manifest, plus a
+# node advertising the "kata" runtime handler, is the whole K8s-side
+# integration surface; the actual Firecracker/QEMU work happens inside
+# containerd's kata-containers shim on the node, outside this repo.
+#
+# Same safety property T1's runtimeclass-gvisor.yaml documents: creating
+# this RuntimeClass object does not require Kata to be installed
+# anywhere -- pods that *reference* it (internal/k8s/provision.go's
+# applyT2PodShape, only reached when a caller both requests
+# TIER_T2_ISOLATED_MICROVM and the orchestrator has ORCHESTRATOR_T2_ENABLED
+# set, see internal/orchestrator/server.go's Server.t2Enabled) simply fail
+# to schedule (FailedScheduling) until a node advertises the "kata"
+# handler. Applying this manifest alone is inert and safe on any cluster.
+#
+# Local dev gap (same class as T1's gVisor gap, see
+# manifests/t1/runtimeclass-gvisor.yaml): Kata needs either hardware
+# virtualisation support (KVM) exposed to the node, or Kata's QEMU/
+# cloud-hypervisor fallback with its own nested-virtualisation
+# requirements -- neither is available inside this project's local k3s
+# cluster (itself running nested inside Docker Desktop's Linux VM, which
+# does not expose KVM through to a further-nested containerd). This is
+# why ORCHESTRATOR_T2_ENABLED defaults to false and PLAN.md's own
+# sequencing note gates real T2 rollout on operational history this
+# session cannot produce -- documented here as a genuine environment
+# limitation, not a shortcut.
+#
+# Real-deployment steps (not run here, mirrors T1's manifest doc + this
+# directory's node-pool-taint.md):
+#   1. Provision a dedicated node group (doc §5.1: "dedicated
+#      node-per-tenant" option, or a shared Kata-capable pool) with
+#      nested-virtualisation/KVM support enabled at the instance-type
+#      level (e.g. AWS bare-metal or nitro instances with KVM exposed,
+#      GCP nested virtualization license, Azure Dv3+ with nested
+#      virt enabled).
+#   2. Install kata-containers + its containerd shim configuration on
+#      every node in that pool (kata-deploy DaemonSet is the standard
+#      upstream mechanism).
+#   3. Label/taint those nodes to match node-pool-taint.md so only T2
+#      pods land there.
+#   4. Set ORCHESTRATOR_T2_ENABLED=true only after PLAN.md's zero-orphans
+#      sequencing gate has been confirmed against this deployment's own
+#      Phase 1 reaper/teardown history.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: kata
+handler: kata

@@ -126,18 +126,93 @@ func TestTelemetryTap_MixedLearnerOutputAndTelemetryInOneChunk(t *testing.T) {
 	}
 }
 
-func TestTelemetryTap_IncompleteTrailingLineIsHeldNotLost(t *testing.T) {
+// Text with no trailing newline yet -- and no chance of being a marker,
+// since it doesn't match any marker prefix -- must flush immediately.
+// Withholding it (the original behavior) is exactly what broke
+// per-keystroke local echo: interactive typing produces one PTY echo
+// byte per keystroke, none of them newline-terminated until Enter, so
+// every character a learner typed sat invisible until Enter finally
+// flushed the whole accumulated line at once.
+func TestTelemetryTap_NonMarkerTextWithNoNewlineFlushesImmediately(t *testing.T) {
 	sink := &fakeSink{}
 	tap := newTelemetryTap("attempt-1", sink, nil)
 
-	out1 := tap.observe([]byte("partial output no newline yet"))
-	if len(out1) != 0 {
-		t.Fatalf("expected nothing emitted for a line with no trailing newline yet, got %q", out1)
+	out1 := tap.observe([]byte("w"))
+	if string(out1) != "w" {
+		t.Fatalf("expected a single keystroke byte to flush immediately, got %q", out1)
 	}
 
-	out2 := tap.observe([]byte(" and now it ends\n"))
-	if string(out2) != "partial output no newline yet and now it ends\n" {
-		t.Fatalf("expected the held-back partial line to be completed and emitted, got %q", out2)
+	out2 := tap.observe([]byte("ho"))
+	if string(out2) != "ho" {
+		t.Fatalf("expected the next keystroke bytes to flush immediately, got %q", out2)
+	}
+
+	out3 := tap.observe([]byte("\n"))
+	if string(out3) != "\n" {
+		t.Fatalf("expected the trailing newline to flush too, got %q", out3)
+	}
+
+	if len(sink.events) != 0 {
+		t.Fatalf("expected no telemetry events for plain typed text, got %d", len(sink.events))
+	}
+}
+
+// Once the marker itself has appeared, the rest of the envelope line is
+// telemetry payload, not learner output -- it must stay held (not leak
+// half-formed onto the terminal, not get lost) until the line completes.
+func TestTelemetryTap_PartialEnvelopeAfterMarkerIsHeldNotLeaked(t *testing.T) {
+	sink := &fakeSink{}
+	tap := newTelemetryTap("attempt-1", sink, nil)
+
+	full := envelopeLine(6000, "echo hi", 0)
+	// Split well after the marker itself, mid-payload.
+	mid := len(telemetryEnvelopeMarker) + 3
+	chunk1, chunk2 := full[:mid], full[mid:]
+
+	out1 := tap.observe([]byte(chunk1))
+	if len(out1) != 0 {
+		t.Fatalf("expected nothing emitted once the marker has started but the line isn't complete, got %q", out1)
+	}
+
+	out2 := tap.observe([]byte(chunk2))
+	if len(out2) != 0 {
+		t.Fatalf("expected the completed telemetry line to be fully stripped, got %q", out2)
+	}
+
+	if len(sink.events) != 1 {
+		t.Fatalf("expected 1 event after the split line completes, got %d", len(sink.events))
+	}
+	if sink.events[0].Cmd != "echo hi" {
+		t.Fatalf("expected cmd 'echo hi', got %q", sink.events[0].Cmd)
+	}
+}
+
+// Text before the marker on the same newline-free chunk (e.g. terminal
+// control sequences the shell just happened to emit right before the
+// hook's printf) is still safe to flush right away -- only the
+// marker-onward portion needs to wait for the line to complete.
+func TestTelemetryTap_TextBeforeMarkerFlushesEvenWithoutNewline(t *testing.T) {
+	sink := &fakeSink{}
+	tap := newTelemetryTap("attempt-1", sink, nil)
+
+	prefix := "\x1b[?2004l\r"
+	chunk := prefix + telemetryEnvelopeMarker + "7000" + fieldSep
+	out := tap.observe([]byte(chunk))
+
+	if string(out) != prefix {
+		t.Fatalf("expected the pre-marker text to flush immediately, got %q", out)
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("expected no event yet -- envelope line isn't complete, got %d", len(sink.events))
+	}
+
+	rest := "false" + fieldSep + "1\r\n"
+	out2 := tap.observe([]byte(rest))
+	if len(out2) != 0 {
+		t.Fatalf("expected the completed telemetry line to be fully stripped, got %q", out2)
+	}
+	if len(sink.events) != 1 || sink.events[0].Cmd != "false" || sink.events[0].ExitCode != 1 {
+		t.Fatalf("unexpected events: %+v", sink.events)
 	}
 }
 

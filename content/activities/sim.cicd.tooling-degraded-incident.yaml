@@ -1,0 +1,272 @@
+id: sim.cicd.tooling-degraded-incident
+version: 1
+mode: PRODUCTION_SIM
+status: DRAFT
+
+meta:
+  title: "INC-5405: the CI/CD toolchain is degraded across five independent systems"
+  summary: >
+    Logs stopped flowing into the ELK stack, a Jenkins build agent went
+    offline, a pipeline keeps resolving a stale dependency version, a
+    Helm release silently ignored a config override, and Ansible can't
+    reach one inventory host -- diagnose all five before the next
+    release window.
+  difficulty_level: L4
+  estimated_minutes: 60
+  locale: en
+  authors: [content-team]
+  tags: [elk, jenkins, helm, ansible, cicd, incident-response]
+
+curriculum:
+  primary_topic: topic.devops.jenkins-distributed-builds
+  also_relevant: [topic.devops.observability-elk-basics, topic.devops.k8s.helm, topic.devops.ansible-basics]
+  courses: [course.sre]
+
+skills:
+  - skill: jenkins.distributed-builds
+    weight: 0.2
+    primary: true
+    bloom: analyze
+  - skill: observability.elk-basics
+    weight: 0.2
+    primary: false
+    bloom: analyze
+  - skill: k8s.helm
+    weight: 0.2
+    primary: false
+    bloom: analyze
+  - skill: ansible.basics
+    weight: 0.2
+    primary: false
+    bloom: analyze
+  - skill: sre.postmortem-authorship
+    weight: 0.2
+    primary: false
+    bloom: create
+
+prerequisites:
+  hard: [k8s.troubleshooting]
+  soft: [jenkins.distributed-builds, observability.elk-basics, k8s.helm, ansible.basics]
+
+objectives:
+  - Diagnose why documents with a conflicting field type are silently dropped by Logstash
+  - Diagnose why a Jenkins build never starts, only queues
+  - Diagnose why a Jenkins pipeline keeps resolving a stale cached dependency version
+  - Diagnose why a Helm upgrade's --set override was silently ignored
+  - Diagnose why Ansible can't reach one specific inventory host
+  - Write a root-cause/timeline/remediation/prevention incident note covering all five
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "2"
+    memory: 4Gi
+    disk: 8Gi
+  ttl_minutes: 75
+  idle_timeout_minutes: 15
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.elk-minimal.v1
+    - fixture: fx.jenkins-basic.v1
+    - fixture: fx.helm-release.v1
+    - fixture: fx.ansible-target.v1
+  cost_budget_usd: 0.45
+
+surfaces: [terminal, editor, k8s_dashboard_readonly]
+
+health_gate:
+  - type: HTTP_PROBE
+    url: "http://practice-jenkins:8080/login"
+    expect_status: 200
+    retries: 30
+
+faults:
+  - id: f.elk.logstash-pipeline-blocked
+    params: { index: practice-logs, conflicting_field: conflict_field }
+    apply_at: T0
+  - id: f.jenkins.agent-offline
+    params: { agent_label: practice-agent }
+    apply_at: T0
+  - id: f.jenkins.stale-cached-dependency
+    params: { job: practice-pipeline, stale_dependency: "1.2.0" }
+    apply_at: T0
+  - id: f.helm.values-override-not-applied
+    params: { release: practice-release, wrong_key_path: config.featurFlag }
+    apply_at: T0
+  - id: f.ansible.inventory-host-unreachable
+    params: { inventory_host: target2 }
+    apply_at: T0
+
+process_signals:
+  diagnostic_efficiency:
+    good_actions:
+      - "kubectl logs"
+      - "kubectl exec"
+      - "kubectl describe pod"
+      - "helm get values"
+      - "helm status"
+    bad_actions:
+      - "kubectl delete pod --all"
+      - "helm uninstall"
+    scoring: ratio_and_ordering
+  blast_radius:
+    forbidden:
+      - "kubectl delete ns"
+      - "kubectl delete namespace"
+
+tasks:
+  - key: t1
+    title: "INC-5405 (P3): documents with a conflicting field are missing from the logs index"
+    required: true
+    instructions_md: |
+      Some documents sent to Logstash never appear in Elasticsearch's
+      `practice-logs` index -- no error is logged anywhere obvious, they
+      just silently vanish.
+
+      Diagnose and fix the pipeline so ALL documents are indexed,
+      including ones with a conflicting field type.
+    validators:
+      - id: v.elk-conflicting-doc-indexed
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-elasticsearch -- curl -s -f http://localhost:9200/practice-logs/_count"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "Check Elasticsearch's own index mapping for conflict_field, and Logstash's monitoring API (port 9600) for dropped-document errors."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "A field that was FIRST indexed as one type (e.g. a number) will silently reject later documents where the same field is a different type (e.g. a string) -- that's a mapping conflict, not a pipeline crash."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: "A Jenkins build never starts, only queues"
+    required: true
+    instructions_md: |
+      A build for `practice-pipeline` has been sitting in Jenkins'
+      build queue without ever starting.
+
+      Diagnose and fix why no agent picks it up.
+    validators:
+      - id: v.jenkins-agent-online
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-jenkins -- wget -q -O- http://localhost:8080/computer/api/json"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "Check the Jenkins computer/agent API for the practice-agent node's own offline status and reason."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "A build stuck in the QUEUE (not running, not failed) usually means no agent matching the job's required label is actually online."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t3
+    title: "A pipeline keeps resolving a stale dependency version"
+    required: true
+    instructions_md: |
+      `practice-pipeline` keeps resolving dependency version `1.2.0`
+      even though the manifest was updated to a newer version weeks
+      ago.
+
+      Diagnose and fix the stale cache.
+    validators:
+      - id: v.jenkins-fresh-dependency
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-jenkins-agent -- cat /tmp/agent-work/dependency-cache/version.txt"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "Check the agent's own local dependency cache directory against what the manifest actually declares."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "The manifest itself may already be correct -- check whether the BUILD is actually reading it, or reading a stale cached copy instead."
+    solution_apply: scripts/t3_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t4
+    title: "A Helm --set override was silently ignored"
+    required: true
+    instructions_md: |
+      Someone ran `helm upgrade practice-release --set
+      config.featurFlag=on` expecting the rendered ConfigMap to change
+      -- it didn't. No error was reported.
+
+      Diagnose and fix the override.
+    validators:
+      - id: v.helm-override-applied
+        type: K8S_ASSERT
+        run: "kubectl get configmap practice-release-config -o jsonpath='{.data.featureFlag}'"
+        expect:
+          jsonpath: "$"
+          op: eq
+          value: "on"
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "Run `helm get values practice-release` -- compare the recorded key path against what the chart's values.yaml actually declares."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "A --set that's silently ignored (no error, no effect) almost always means the key PATH itself is wrong, not that Helm is broken."
+    solution_apply: scripts/t4_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t5
+    title: "Ansible can't reach one inventory host"
+    required: true
+    instructions_md: |
+      `ansible targets -m ping` succeeds for `target1` but fails for
+      `target2` with an unreachable error.
+
+      Diagnose and fix the inventory so both hosts respond.
+    validators:
+      - id: v.ansible-both-hosts-reachable
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-ansible-runner -- ansible targets -i /ansible-config/inventory.ini -m ping"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "Compare target2's ansible_host value in the inventory against its real Service DNS name."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "An UNREACHABLE result (not a permission or auth error) from Ansible usually means the hostname itself doesn't resolve."
+    solution_apply: scripts/t5_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+artifacts_required:
+  - key: incident-note
+    type: MARKDOWN
+    rubric: rub.incident-note.v2
+
+scoring:
+  profile: sp.production-sim.default
+
+ai_mentor:
+  persona: senior_engineer
+  max_hints: 5
+  token_budget: 12000
+  solution_visibility: HIDDEN
+  policy: policy.sim.socratic.v1
+
+reference_solution:
+  repo_path: solutions/sim.cicd.tooling-degraded-incident/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

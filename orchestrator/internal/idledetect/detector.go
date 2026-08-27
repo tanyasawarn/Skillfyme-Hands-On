@@ -9,14 +9,22 @@ package idledetect
 
 import (
 	"context"
-	"log"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
+
+	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/destroyreason"
+	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/logging"
+	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/loop"
+	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/metrics"
 )
+
+// log is this package's structured logger (PHASE1_MVP_COMPLETION.md
+// §4.2), component=idledetect.
+var log = logging.Component("idledetect")
 
 // ActivityRecorder is written to by the Session Broker on every stdin
 // byte (doc's "no stdin" signal) -- kept as a narrow interface so
@@ -42,6 +50,15 @@ type envState struct {
 	warnedAt3Min  bool
 }
 
+// cpuReader returns the current CPU usage of an environment's workspace
+// pod as a percentage of its provisioned CPU limit. Pulled out as a
+// field on Detector (rather than calling the metrics client inline) so
+// tick()'s two-signal logic -- the actual "don't kill a learner
+// mid-terraform-apply" guarantee -- is unit-testable without a live
+// metrics-server. The production wiring is metricsServerCPUReader,
+// installed by New(); tests install their own.
+type cpuReader func(ctx context.Context, envID string, cpuLimitMilli int64) (float64, error)
+
 // Detector polls per-environment CPU metrics (via metrics-server) and
 // tracks last-activity timestamps reported by the Session Broker,
 // implementing doc §5.6's combined idle/TTL clock table's Idle row.
@@ -49,17 +66,20 @@ type Detector struct {
 	clientset     *kubernetes.Clientset
 	metricsClient *metricsclient.Clientset
 	destroyFn     DestroyFunc
+	readCPU       cpuReader
 
 	tracked map[string]*envState
 }
 
 func New(clientset *kubernetes.Clientset, metricsClient *metricsclient.Clientset, destroyFn DestroyFunc) *Detector {
-	return &Detector{
+	d := &Detector{
 		clientset:     clientset,
 		metricsClient: metricsClient,
 		destroyFn:     destroyFn,
 		tracked:       make(map[string]*envState),
 	}
+	d.readCPU = d.metricsServerCPUReader
+	return d
 }
 
 // Track registers an environment for idle monitoring, with its
@@ -92,20 +112,11 @@ func (d *Detector) RecordActivity(envID string) {
 
 // Run polls every 30s -- frequent enough to catch the 5-minute CPU-low
 // window and the per-activity idle_timeout accurately without hammering
-// the metrics-server API.
+// the metrics-server API. runImmediately=false: nothing has had time to
+// go idle in the first instant of a fresh process.
 func (d *Detector) Run(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	log.Println("[idledetect] started")
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			d.tick(ctx)
-		}
-	}
+	log.Info("started")
+	loop.RunTicker(ctx.Done(), 30*time.Second, func() { d.tick(ctx) }, false)
 }
 
 func (d *Detector) tick(ctx context.Context) {
@@ -117,7 +128,8 @@ func (d *Detector) tick(ctx context.Context) {
 		// channel doesn't exist yet on the terminal WS, which is
 		// currently PTY-data-only, not a mixed control+data protocol).
 		if !state.warnedAt3Min && silentFor >= state.idleTimeout-3*time.Minute && silentFor < state.idleTimeout {
-			log.Printf("[idledetect] env=%s approaching idle timeout in <3min (silent for %s)", envID, silentFor.Round(time.Second))
+			log.Info("environment approaching idle timeout in <3min",
+				logging.KeyEnvID, envID, "silent_for", silentFor.Round(time.Second).String())
 			state.warnedAt3Min = true
 		}
 
@@ -125,9 +137,10 @@ func (d *Detector) tick(ctx context.Context) {
 			continue // not silent long enough yet regardless of CPU
 		}
 
-		cpuPercent, err := d.currentCPUPercent(ctx, envID, state.cpuLimitMilli)
+		cpuPercent, err := d.readCPU(ctx, envID, state.cpuLimitMilli)
 		if err != nil {
-			log.Printf("[idledetect] env=%s: could not read CPU metrics (metrics-server may not be ready yet): %v", envID, err)
+			log.Warn("could not read CPU metrics (metrics-server may not be ready yet)",
+				logging.KeyEnvID, envID, logging.KeyError, err)
 			continue // doc's own caution: don't destroy on a signal you couldn't actually read
 		}
 
@@ -146,14 +159,21 @@ func (d *Detector) tick(ctx context.Context) {
 		}
 
 		if time.Since(*state.cpuLowSince) >= cpuLowDuration {
-			log.Printf("[idledetect] env=%s idle (silent %s, CPU<%.0f%% for >%s) -- destroying", envID, silentFor.Round(time.Second), cpuThresholdPercent, cpuLowDuration)
-			d.destroyFn(ctx, envID, "idle")
+			log.Info("environment idle, destroying",
+				logging.KeyEnvID, envID, logging.KeyReason, destroyreason.Idle,
+				"silent_for", silentFor.Round(time.Second).String(),
+				"cpu_threshold_pct", cpuThresholdPercent, "cpu_low_for", cpuLowDuration.String())
+			d.destroyFn(ctx, envID, destroyreason.Idle)
+			metrics.IdleDestroyedTotal.Inc()
 			d.Untrack(envID)
 		}
 	}
 }
 
-func (d *Detector) currentCPUPercent(ctx context.Context, envID string, cpuLimitMilli int64) (float64, error) {
+// metricsServerCPUReader is the production cpuReader: it reads the
+// workspace pod's live usage from metrics-server. New() installs it as
+// d.readCPU.
+func (d *Detector) metricsServerCPUReader(ctx context.Context, envID string, cpuLimitMilli int64) (float64, error) {
 	ns := "env-" + envID
 	metrics, err := d.metricsClient.MetricsV1beta1().PodMetricses(ns).Get(ctx, "workspace", metav1.GetOptions{})
 	if err != nil {

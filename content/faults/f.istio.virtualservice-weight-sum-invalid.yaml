@@ -1,7 +1,19 @@
+# v2: re-scoped after live verification (this session, real Istio
+# 1.30.3 CRDs + istioctl analyze against a real cluster + reading
+# pkg/config/validation/validation.go's actual source). v1's premise
+# ("weights must sum to exactly 100 or Istio rejects the config") is
+# factually outdated: modern Istio treats VirtualService route weights
+# as RELATIVE PROPORTIONS, not literal percentages -- e.g. 60+60 is
+# valid and simply means a 50/50 split, confirmed live with zero
+# rejection. The one real, live-verified case Istio genuinely rejects is
+# a TOTAL weight of zero across all routes (real error, confirmed live:
+# "IST0106 ... Schema validation error: total destination weight = 0").
+# Re-scoped to that real mechanism -- same skill target (weight
+# validation / canary rollout troubleshooting), true claimed symptom.
 id: f.istio.virtualservice-weight-sum-invalid
-version: 1
-title: VirtualService route weights don't sum to 100
-summary: A canary rollout's traffic-split VirtualService has route weights that don't add up to 100, causing Istio to reject the config and fall back to old routing.
+version: 2
+title: VirtualService route weights are all zero
+summary: A canary rollout's traffic-split VirtualService has every route weight set to zero, so Istio's own validation rejects the config and traffic never reaches either version as configured.
 
 targets: [istio.traffic-management]
 symptom_class: TrafficSplitNotApplied
@@ -9,8 +21,8 @@ skills_probed: [istio.traffic-management]
 
 canonical_diagnostic_path:
   - "observe traffic still going 100% to the old version despite the new VirtualService"
-  - "istioctl analyze → see a weight-sum validation error"
-  - "kubectl get virtualservice -o yaml → sum the route weights manually"
+  - "istioctl analyze → see IST0106: total destination weight = 0"
+  - "kubectl get virtualservice -o yaml → confirm every route's weight is 0"
 
 expected_fix_class: [fix_weight_sum_to_100]
 detectability: medium
@@ -22,10 +34,11 @@ params_schema:
     description: Name of the target VirtualService.
   weight_a:
     type: integer
-    description: First route's weight.
+    description: First route's weight (this fault sets it to 0 regardless of the value passed here).
   weight_b:
     type: integer
-    description: Second route's weight (should NOT sum to 100 with weight_a).
+    description: Second route's weight (this fault sets it to 0 regardless of the value passed here).
 
 reversible: true
 min_tier: T2_ISOLATED_MICROVM
+handler_implemented: true

@@ -1,0 +1,236 @@
+id: sim.docker.build-and-deploy-incident
+version: 1
+mode: PRODUCTION_SIM
+status: DRAFT
+
+meta:
+  title: "INC-5708: four independent Docker/CI failures on release day"
+  summary: >
+    A fresh image build crashes on start, two containers can't reach
+    each other, a Swarm service update is stuck on an auth-denied pull,
+    and a GitHub Actions reusable workflow is silently failing auth --
+    diagnose all four before the release window closes.
+  difficulty_level: L4
+  estimated_minutes: 55
+  locale: en
+  authors: [content-team]
+  tags: [docker, github-actions, swarm, incident-response, troubleshooting]
+
+curriculum:
+  primary_topic: topic.devops.docker-basics
+  also_relevant: [topic.devops.docker-networking, topic.devops.docker-swarm, topic.devops.cicd-troubleshooting]
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: docker.basics
+    weight: 0.2
+    primary: true
+    bloom: analyze
+  - skill: docker.networking
+    weight: 0.2
+    primary: false
+    bloom: analyze
+  - skill: docker.swarm
+    weight: 0.2
+    primary: false
+    bloom: analyze
+  - skill: cicd.troubleshooting
+    weight: 0.2
+    primary: false
+    bloom: analyze
+  - skill: sre.postmortem-authorship
+    weight: 0.2
+    primary: false
+    bloom: create
+
+prerequisites:
+  hard: [docker.basics]
+  soft: [docker.networking, docker.swarm]
+
+objectives:
+  - Diagnose and fix a container that exits immediately due to a wrong WORKDIR
+  - Diagnose and fix two containers unable to reach each other due to a network mismatch
+  - Diagnose and fix a Swarm service stuck on an authentication-denied image pull
+  - Diagnose and fix a GitHub Actions reusable workflow silently failing auth
+  - Write a root-cause/timeline/remediation/prevention incident note covering all four
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "2"
+    memory: 4Gi
+    disk: 10Gi
+  ttl_minutes: 70
+  idle_timeout_minutes: 15
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.dind-workspace.v1
+  cost_budget_usd: 0.45
+
+# No HTTP health_gate: fx.dind-workspace.v1's docker daemon listens on
+# its own internal Unix socket only (no TCP port exposed), so there's no
+# real HTTP endpoint to probe here -- Phase 1's actual gate (pod
+# reached Ready) already covers the meaningful precondition for this
+# activity (a real, working Docker-in-Docker daemon).
+surfaces: [terminal, editor]
+
+faults:
+  - id: f.docker.dockerfile-wrong-workdir
+    params: { image: "practice-workdir-app:latest", wrong_workdir: "/wrong-path" }
+    apply_at: T0
+  - id: f.docker.network-not-attached
+    params: { client_container: practice-net-client, correct_network: practice-net }
+    apply_at: T0
+  - id: f.docker.swarm-service-image-pull-fail
+    params: { service: practice-swarm-svc, registry: "localhost:5555" }
+    apply_at: T0
+  - id: f.github.actions-secret-not-passed
+    params: { workflow: caller-broken.yml, missing_secret: DEPLOY_TOKEN }
+    apply_at: T0
+
+process_signals:
+  diagnostic_efficiency:
+    good_actions:
+      - "docker logs"
+      - "docker inspect"
+      - "docker network inspect"
+      - "docker service ps"
+    bad_actions:
+      - "docker system prune -a"
+      - "docker rm -f"
+    scoring: ratio_and_ordering
+  blast_radius:
+    forbidden:
+      - "docker system prune -a -f"
+      - "kubectl delete ns"
+
+tasks:
+  - key: t1
+    title: "INC-5708 (P3): a fresh image build exits immediately"
+    required: true
+    instructions_md: |
+      Building and running `practice-workdir-app:latest` results in the
+      container exiting immediately with a nonzero code.
+
+      **Access:** exec access into the DinD pod (real `docker` CLI).
+
+      Diagnose and fix the Dockerfile so the container runs and stays
+      up.
+    validators:
+      - id: v.workdir-app-runs
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-dind -- docker run --rm practice-workdir-app:latest"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "`docker logs` on the exited container and `docker inspect --format '{{.Config.WorkingDir}}'` — compare WORKDIR against where COPY actually placed the app's files."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "A container that exits immediately with a real 'file not found' error, not a crash, means the app can't find something relative to its own working directory."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: "Two containers on the same compose stack can't reach each other"
+    required: true
+    instructions_md: |
+      `practice-net-client` can't reach `practice-net-server` at all --
+      not refused, unresolvable.
+
+      Diagnose and fix the network attachment.
+    validators:
+      - id: v.client-can-reach-server
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-dind -- docker exec practice-net-client wget -q -T 5 -O- http://practice-net-server:8080/"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "`docker inspect practice-net-client --format '{{.NetworkSettings.Networks}}'` — compare against practice-net-server's own network."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "A container started without --network lands on the default bridge, which has no name-based DNS resolution to containers on a user-defined network."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t3
+    title: "A Swarm service update is stuck on an auth-denied pull"
+    required: true
+    instructions_md: |
+      `practice-swarm-svc`'s latest update is stuck -- tasks are
+      Rejected with a real registry authorization error.
+
+      Diagnose and fix the credential issue.
+    validators:
+      - id: v.swarm-service-converged
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-dind -- docker service ps practice-swarm-svc --filter desired-state=running --format '{{.CurrentState}}'"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "`docker service ps --no-trunc practice-swarm-svc` shows the exact real pull-auth error -- check whether the node is actually logged into the registry the image comes from."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "'pull access denied... no basic auth credentials' means exactly what it says -- the node needs a real docker login against that registry before the update can proceed."
+    solution_apply: scripts/t3_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t4
+    title: "A GitHub Actions reusable workflow is silently failing auth"
+    required: true
+    instructions_md: |
+      The `caller-broken.yml` workflow calls a reusable workflow that
+      needs `DEPLOY_TOKEN` -- the job fails with an auth error, but the
+      workflow YAML itself has no obvious syntax problem.
+
+      Diagnose and fix the secret-passing gap.
+    validators:
+      - id: v.workflow-succeeds
+        type: SHELL_ASSERT
+        run: "kubectl exec deploy/practice-dind -- sh -c 'cd /workflows && /usr/local/bin/act push -W .github/workflows/caller-broken.yml -P ubuntu-latest=catthehacker/ubuntu:act-latest --container-architecture linux/arm64'"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "Compare caller-broken.yml's `uses:` block against caller-healthy.yml's -- one of them passes `secrets:` explicitly and one doesn't."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "A reusable workflow's own secrets: block declares what it NEEDS -- the CALLER still has to pass each one explicitly (or use secrets: inherit), it isn't automatic."
+    solution_apply: scripts/t4_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+artifacts_required:
+  - key: incident-note
+    type: MARKDOWN
+    rubric: rub.incident-note.v2
+
+scoring:
+  profile: sp.production-sim.default
+
+ai_mentor:
+  persona: senior_engineer
+  max_hints: 4
+  token_budget: 10000
+  solution_visibility: HIDDEN
+  policy: policy.sim.socratic.v1
+
+reference_solution:
+  repo_path: solutions/sim.docker.build-and-deploy-incident/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

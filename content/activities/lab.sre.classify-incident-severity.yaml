@@ -1,0 +1,112 @@
+id: lab.sre.classify-incident-severity
+version: 1
+mode: GUIDED_LAB
+status: DRAFT
+
+meta:
+  title: Read symptoms and classify incident severity before acting
+  summary: Given a set of live symptoms, determine severity and the correct first diagnostic command -- before touching anything.
+  difficulty_level: L2
+  estimated_minutes: 20
+  locale: en
+  authors: [content-team]
+  tags: [sre, incident-response, troubleshooting]
+
+curriculum:
+  primary_topic: topic.sre.incident-diagnosis
+  courses: [course.sre]
+
+skills:
+  - skill: sre.incident-response-process
+    weight: 0.7
+    primary: true
+    bloom: apply
+  - skill: k8s.troubleshooting
+    weight: 0.3
+    primary: false
+    bloom: understand
+
+prerequisites:
+  hard: [k8s.troubleshooting]
+  soft: []
+
+objectives:
+  - Distinguish "gather more information" actions from "change state" actions
+  - Run a read-only diagnostic sequence before any remediation attempt
+  - Explain why diagnosis-before-action reduces MTTR even though it feels slower
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "1"
+    memory: 1.5Gi
+    disk: 3Gi
+  ttl_minutes: 25
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.pod-crashloop.v1
+  cost_budget_usd: 0.03
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: t1
+    title: Diagnose before you act
+    required: true
+    instructions_md: |
+      A Pod named `broken-app` is unhealthy. Before making any change,
+      run at least three read-only diagnostic commands (`kubectl
+      describe`, `kubectl logs`, `kubectl get events`) to build a
+      complete picture of the failure, THEN apply the fix.
+
+      Fixing it fast by guessing is not the goal here -- the point of
+      this lab is the diagnose-first sequence itself.
+    validators:
+      - id: v.pod-running
+        type: SHELL_ASSERT
+        run: "kubectl get pod broken-app -o jsonpath='{.status.phase}' | grep -q Running"
+        expect:
+          exit_code: 0
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "broken-app still isn't Running. `kubectl describe pod broken-app` and `kubectl logs broken-app` will show the actual failure reason."
+    hints:
+      - level: 1
+        penalty: 0.02
+        text: "Diagnose before you fix -- guessing at a fix without reading the symptoms first is exactly the anti-pattern this lab is teaching against."
+      - level: 2
+        penalty: 0.06
+        text: "kubectl describe pod broken-app shows the container's last-state and events; kubectl logs broken-app shows what the process itself printed before dying."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.guided-lab.default
+  overrides:
+    weights:
+      technical_correctness: 0.60
+      task_completion: 0.20
+      efficiency: 0.20
+
+ai_mentor:
+  persona: tutor
+  max_hints: 6
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.lab.socratic.v1
+
+reference_solution:
+  repo_path: solutions/lab.sre.classify-incident-severity/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

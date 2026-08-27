@@ -115,6 +115,16 @@ message ProvisionRequest {
   int32 idle_timeout_minutes = 8;
   string network_policy = 9;
   string idempotency_key = 10;
+  // PLAN.md M1.4/M1.14: doc §3.2/§7.3's health_gate array (contracts/
+  // activity_spec.schema.json), JSON-encoded (matching InjectFaultRequest.params'
+  // "wire type is a plain string, richer shape parsed by the receiver"
+  // precedent, rather than a new typed message per check kind) --
+  // checks that must pass, in order, before any fault is applied (or,
+  // absent PRODUCTION_SIM faults, before the environment is considered
+  // READY). Empty string means "no richer health_gate declared,"
+  // matching every GUIDED_LAB activity today (pod-Ready remains the
+  // whole gate for those, exactly as before this field existed).
+  string health_gate_json = 11;
 }
 
 message ProvisionResponse {
@@ -126,6 +136,11 @@ message ProvisionResponse {
 
 message ConnectRequest {
   string environment_id = 1;
+  // Ownership check (same pattern as InjectFaultRequest.attempt_id below):
+  // the RPC handler verifies this matches env.environment.attempt_id for
+  // environment_id before minting a session token, returning
+  // PermissionDenied on mismatch. Required (empty is rejected).
+  string attempt_id = 2;
 }
 
 message ConnectResponse {
@@ -161,6 +176,11 @@ message MintCredentialsRequest {
   string environment_id = 1;
   int32 ttl_seconds = 2;             // 300s default per §6.2 execution rules
   repeated string scopes = 3;        // e.g. "k8s.read_only", "cloud.read_only"
+  // Ownership check (same pattern as InjectFaultRequest.attempt_id below):
+  // the RPC handler verifies this matches env.environment.attempt_id for
+  // environment_id before minting a credential, returning PermissionDenied
+  // on mismatch. Required (empty is rejected).
+  string attempt_id = 4;
 }
 
 message MintCredentialsResponse {
@@ -171,6 +191,15 @@ message MintCredentialsResponse {
 message DestroyRequest {
   string environment_id = 1;
   string reason = 2;                 // "submit" | "idle" | "ttl" | "budget" | "reaper" | "admin"
+  // Ownership check (same pattern as InjectFaultRequest.attempt_id below):
+  // the RPC handler verifies this matches env.environment.attempt_id for
+  // environment_id before tearing it down, returning PermissionDenied on
+  // mismatch. Required (empty is rejected) EXCEPT when environment_id
+  // doesn't exist at all -- that case returns AlreadyDestroyed=true before
+  // any ownership check runs, since there is no owner row left to check
+  // against and a double-destroy of an already-gone environment is
+  // success, not a caller error (see DestroyResponse's own comment).
+  string attempt_id = 3;
 }
 
 message DestroyResponse {
@@ -182,6 +211,17 @@ message InjectFaultRequest {
   string fault_id = 2;
   string fault_version = 3;
   map<string, string> params = 4;
+  // PHASE2_CLOSEOUT.md's flagged access-control gap: InjectFault
+  // previously had no way to verify the caller's attempt actually owns
+  // environment_id -- any caller holding the service-level shared secret
+  // (internal/orchestrator/auth.go) could target ANY environment,
+  // including another learner's. The RPC handler now verifies this
+  // matches env.environment.attempt_id for environment_id before
+  // applying anything, returning PermissionDenied on mismatch. Required
+  // (empty is rejected, same InvalidArgument stance as Provision's own
+  // attempt_id field) -- this is exactly the ownership check that field
+  // exists to make possible.
+  string attempt_id = 5;
 }
 
 message InjectFaultResponse {
@@ -217,6 +257,11 @@ message ExecValidatorRequest {
   string run = 4;              // command / file path, per validator_type -- see contracts/activity_spec.schema.json's ValidatorSpec
   string expect_json = 5;      // ValidatorSpec.expect, JSON-encoded -- shape varies per validator_type, not modeled field-by-field in proto
   int32 timeout_ms = 6;        // 0 = use the executor's own default
+  // Ownership check (same pattern as InjectFaultRequest.attempt_id below):
+  // the RPC handler verifies this matches env.environment.attempt_id for
+  // environment_id before executing the validator, returning
+  // PermissionDenied on mismatch. Required (empty is rejected).
+  string attempt_id = 7;
 }
 
 message ExecValidatorResponse {
@@ -230,6 +275,11 @@ message ExecShellRequest {
   string environment_id = 1;
   string command = 2;          // run via `/bin/bash -c`, same as ExecValidator's SHELL_* types
   int32 timeout_ms = 3;        // 0 = use the executor's own default
+  // Ownership check (same pattern as InjectFaultRequest.attempt_id below):
+  // the RPC handler verifies this matches env.environment.attempt_id for
+  // environment_id before running the command, returning PermissionDenied
+  // on mismatch. Required (empty is rejected).
+  string attempt_id = 4;
 }
 
 message ExecShellResponse {
