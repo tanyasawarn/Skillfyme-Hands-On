@@ -26,7 +26,7 @@ export interface CatalogEntry {
 
 /** Doc §3.2 ActivitySpec shape, fields the UI actually renders. */
 export interface ActivitySpec {
-  meta?: { title?: string; summary?: string };
+  meta?: { title?: string; summary?: string; difficulty_level?: string; estimated_minutes?: number };
   objectives?: string[];
   tasks?: Array<{ key: string; title: string; required: boolean; instructions_md: string }>;
   /**
@@ -37,7 +37,38 @@ export interface ActivitySpec {
    * filesystem navigation, etc.) omit it. Every published spec sets
    * this explicitly -- see content/activities/*.yaml.
    */
-  surfaces?: Array<'terminal' | 'editor'>;
+  surfaces?: Array<'terminal' | 'editor' | 'k8s_dashboard_readonly' | 'preview'>;
+
+  /**
+   * PRODUCTION_SIM fields (doc §1.3.2, §3.3). Present on `mode:
+   * PRODUCTION_SIM` activities; absent on GUIDED_LAB. The simulation UI
+   * (SimShell) derives the ticket, symptom list, SLA timer, escalation
+   * point, and debrief from these + `meta` + the evaluation.
+   */
+  faults?: Array<{ id: string; params?: Record<string, unknown>; apply_at: string /* "T0" | `T+${minutes}` */ }>;
+  artifacts_required?: Array<{ key: string; type: 'MARKDOWN'; rubric?: string }>;
+  process_signals?: {
+    blast_radius?: { forbidden?: string[] };
+    diagnostic_efficiency?: { good_actions?: string[]; bad_actions?: string[] };
+  };
+  reference_solution?: { repo_path?: string; visibility?: string };
+}
+
+/**
+ * POST /v1/practice/attempts/{id}/artifacts/{key} — submit a required
+ * written artifact (the incident note). Returns the provisional grade
+ * envelope from ArtifactService.
+ */
+export interface ArtifactSubmitResult {
+  provisional: boolean;
+  provisionalReason?: string;
+  criterionGrades?: Array<{
+    criterion: string;
+    level: number;
+    confidence?: number;
+    justification?: string;
+    flags?: string[];
+  }>;
 }
 
 export interface CatalogEntryDetail extends CatalogEntry {
@@ -280,6 +311,12 @@ export const api = {
     ),
   getCourseTree: (slug: string, tenantId: string) =>
     request<CourseTree>(`/v1/practice/courses/${slug}?tenant_id=${encodeURIComponent(tenantId)}`),
+
+  submitArtifact: (attemptId: string, key: string, content: string) =>
+    request<ArtifactSubmitResult>(`/v1/practice/attempts/${attemptId}/artifacts/${encodeURIComponent(key)}`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
 
   listWorkspaceFiles: (attemptId: string, dir: string) =>
     request<WorkspaceFileEntry[]>(`/v1/practice/attempts/${attemptId}/files?dir=${encodeURIComponent(dir)}`),

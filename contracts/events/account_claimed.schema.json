@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.practiceengine.internal/events/account_claimed.schema.json",
+  "title": "AccountClaimedPayload",
+  "description": "Phase 3 (memory.md §5.3). Produced by the Orchestrator's Account Pool Manager. A vended AWS sandbox account moved AVAILABLE -> IN_USE for this attempt.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["cloud_account_id", "region"],
+  "properties": {
+    "cloud_account_id": { "type": "string", "description": "AWS account id (12 digits)" },
+    "region": { "type": "string" },
+    "budget_usd": { "type": "number", "minimum": 0, "description": "the per-account budget alarm set at claim time, from activity_spec.environment.cost_budget_usd" }
+  }
+}

@@ -204,6 +204,25 @@ func resolveTier(requestedTier pb.Tier, t2Enabled bool) (k8s.Tier, error) {
 	return k8s.TierT2IsolatedMicroVM, nil
 }
 
+// resolveEnvTTL is the pure ttl-selection decision Provision applies --
+// pulled out (same rationale as resolveTier: small, cost-relevant,
+// isolate cheaply) so the per-tier default and the caller-override
+// precedence are unit-testable without a full Server. Precedence:
+// a caller-supplied ttl_minutes (> 0) always wins; otherwise T2 gets
+// ttl.EnvironmentDefaultT2 (shorter -- at T2's $0.10-0.35/env-hr band a
+// 90-min tail on a walked-away microVM is ~2x the intended per-attempt
+// cost, docs/t2-cost-optimization.md §3.1) and every other tier gets
+// t1Default (the Server's configured defaultTTL).
+func resolveEnvTTL(tier k8s.Tier, ttlMinutes int32, t1Default time.Duration) time.Duration {
+	if ttlMinutes > 0 {
+		return time.Duration(ttlMinutes) * time.Minute
+	}
+	if tier == k8s.TierT2IsolatedMicroVM {
+		return ttl.EnvironmentDefaultT2
+	}
+	return t1Default
+}
+
 // checkEnvironmentOwnership is the ownership decision shared by every
 // RPC that accepts a caller-supplied environment_id alongside an
 // attempt_id (InjectFault originally, now also Connect, Destroy,
@@ -388,9 +407,9 @@ func (s *Server) Provision(ctx context.Context, req *pb.ProvisionRequest) (resp 
 			logging.KeyEnvID, envID, logging.KeyAttemptID, req.AttemptId,
 			"blueprint", req.BlueprintId, "tier", req.Tier.String(), "source", "cold")
 
-		resources := k8s.ResourceSpec{CPU: "2", Memory: "4Gi"}
+		resources := k8s.DefaultT1Resources
 		if tier == k8s.TierT2IsolatedMicroVM {
-			resources = k8s.ResourceSpec{CPU: "8", Memory: "16Gi"} // matches applyLimitRange's T2 ceiling (internal/k8s/provision.go)
+			resources = k8s.DefaultT2Resources // matches applyLimitRange's T2 ceiling (internal/k8s/provision.go)
 		}
 
 		if err := s.provisioner.Provision(ctx, k8s.ProvisionRequest{
@@ -431,10 +450,7 @@ func (s *Server) Provision(ctx context.Context, req *pb.ProvisionRequest) (resp 
 	// Doc §13.5 #2: register with the reaper *before* returning to the
 	// caller, so a crash on the very next line still leaves a hard
 	// deadline on record.
-	envTTL := s.defaultTTL
-	if req.TtlMinutes > 0 {
-		envTTL = time.Duration(req.TtlMinutes) * time.Minute
-	}
+	envTTL := resolveEnvTTL(tier, req.TtlMinutes, s.defaultTTL)
 	if err := s.reaper.Register(ctx, envID, "env-"+envID, envTTL); err != nil {
 		slogger.Warn("failed to register environment with reaper (may leak if not destroyed cleanly)",
 			logging.KeyEnvID, envID, logging.KeyAttemptID, req.AttemptId, logging.KeyError, err)

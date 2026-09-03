@@ -13,19 +13,28 @@ import (
 // produces is verified without needing a live cluster for these
 // specific assertions.
 //
-// A real, live-cluster-gated test of the FULL Provision(T2) path exists
-// separately in provision_t2_live_test.go -- this file's own earlier
-// doc comment claimed "no live K8s cluster reachable" as the reason
-// end-to-end T2 verification wasn't attempted; that claim was stale by
-// the time it was checked this session (a live dev cluster has been
-// reachable and in continuous use throughout). See that file for the
-// real, live-verified outcome: RuntimeClass "kata" not found (no
-// Kata-capable node exists in this environment) -- the actual,
-// concrete, environment-specific gap, not an untested code path.
+// As of the ₹100/user cost decision, T2 runs under the **Sysbox**
+// runtime (RuntimeClassName from ProvisionerConfig.T2RuntimeClass,
+// default "sysbox-runc") on the SAME shared node pool as T1 -- no
+// dedicated Kata metal pool, no microVM. So these tests assert the
+// Sysbox pod shape, not the old Kata one: a configurable RuntimeClass,
+// NO tier2 nodeSelector/toleration, root-in-userns (not privileged) by
+// default, privileged only when the blueprint declares an eBPF
+// capability. See applyT2PodShape's doc comment and
+// docs/t2-cost-optimization-100.md.
+//
+// The Kata shape is preserved in git history + documented as the
+// scale-up path in infra/practice-cluster/t2-nodepool-kata/.
 
 func baseT1PodSpec() *corev1.PodSpec {
 	allowPrivilegeEscalation := false
+	runAsNonRoot := true
+	var runAsUser int64 = 1000
 	return &corev1.PodSpec{
+		SecurityContext: &corev1.PodSecurityContext{
+			RunAsNonRoot: &runAsNonRoot,
+			RunAsUser:    &runAsUser,
+		},
 		Containers: []corev1.Container{
 			{
 				Name: "shell",
@@ -44,47 +53,96 @@ func baseT1PodSpec() *corev1.PodSpec {
 	}
 }
 
-func TestApplyT2PodShape_SetsKataRuntimeClass(t *testing.T) {
+// sysboxProvisioner returns a Provisioner whose config uses the default
+// Sysbox runtime class, for the pure applyT2PodShape tests.
+func sysboxProvisioner() *Provisioner {
+	return &Provisioner{cfg: ProvisionerConfig{T2RuntimeClass: T2RuntimeClassDefault}}
+}
+
+func TestApplyT2PodShape_SetsConfiguredRuntimeClass(t *testing.T) {
 	podSpec := baseT1PodSpec()
-	applyT2PodShape(podSpec, ProvisionRequest{})
+	sysboxProvisioner().applyT2PodShape(podSpec, ProvisionRequest{})
+
+	if podSpec.RuntimeClassName == nil || *podSpec.RuntimeClassName != "sysbox-runc" {
+		t.Errorf("expected RuntimeClassName=sysbox-runc (the default T2RuntimeClass), got %v", podSpec.RuntimeClassName)
+	}
+}
+
+func TestApplyT2PodShape_RespectsCustomRuntimeClass(t *testing.T) {
+	podSpec := baseT1PodSpec()
+	p := &Provisioner{cfg: ProvisionerConfig{T2RuntimeClass: "kata"}}
+	p.applyT2PodShape(podSpec, ProvisionRequest{})
 
 	if podSpec.RuntimeClassName == nil || *podSpec.RuntimeClassName != "kata" {
-		t.Errorf("expected RuntimeClassName=kata, got %v", podSpec.RuntimeClassName)
+		t.Errorf("expected RuntimeClassName=kata (operator override via ORCHESTRATOR_T2_RUNTIME_CLASS), got %v", podSpec.RuntimeClassName)
 	}
 }
 
-func TestApplyT2PodShape_SetsNodeSelectorAndToleration(t *testing.T) {
+func TestApplyT2PodShape_EmptyRuntimeClassLeavesItUnset(t *testing.T) {
+	// Local dev with no Sysbox: honest degradation to a plain container
+	// (same stance runtimeClassForT1 takes when gVisor is off), NOT a
+	// hardcoded class that makes every Provision fail to schedule.
 	podSpec := baseT1PodSpec()
-	applyT2PodShape(podSpec, ProvisionRequest{})
+	p := &Provisioner{cfg: ProvisionerConfig{T2RuntimeClass: ""}}
+	p.applyT2PodShape(podSpec, ProvisionRequest{})
 
-	if podSpec.NodeSelector["practiceengine.dev/tier2"] != "true" {
-		t.Errorf("expected nodeSelector practiceengine.dev/tier2=true, got %v", podSpec.NodeSelector)
+	if podSpec.RuntimeClassName != nil {
+		t.Errorf("expected RuntimeClassName unset when T2RuntimeClass is empty, got %v", *podSpec.RuntimeClassName)
 	}
+}
 
-	found := false
+func TestApplyT2PodShape_DoesNotSetTier2NodeSelectorOrToleration(t *testing.T) {
+	// Sysbox runs on the SAME shared node pool as T1. There is no
+	// practiceengine.dev/tier2 metal pool to pin to.
+	podSpec := baseT1PodSpec()
+	sysboxProvisioner().applyT2PodShape(podSpec, ProvisionRequest{})
+
+	if _, ok := podSpec.NodeSelector["practiceengine.dev/tier2"]; ok {
+		t.Errorf("Sysbox T2 must NOT set a practiceengine.dev/tier2 nodeSelector; got %v", podSpec.NodeSelector)
+	}
 	for _, tol := range podSpec.Tolerations {
-		if tol.Key == "workload" && tol.Value == "learner-t2" && tol.Effect == corev1.TaintEffectNoSchedule {
-			found = true
+		if tol.Key == "workload" && tol.Value == "learner-t2" {
+			t.Errorf("Sysbox T2 must NOT add a learner-t2 toleration; got %+v", podSpec.Tolerations)
 		}
 	}
-	if !found {
-		t.Errorf("expected a toleration for workload=learner-t2:NoSchedule, got %+v", podSpec.Tolerations)
+}
+
+func TestApplyT2PodShape_RunsAsRootInUserNS_NotPrivilegedByDefault(t *testing.T) {
+	podSpec := baseT1PodSpec()
+	sysboxProvisioner().applyT2PodShape(podSpec, ProvisionRequest{})
+
+	// Pod-level: root allowed (Sysbox remaps it to an unprivileged host uid).
+	if podSpec.SecurityContext == nil || podSpec.SecurityContext.RunAsNonRoot == nil || *podSpec.SecurityContext.RunAsNonRoot {
+		t.Errorf("expected pod SecurityContext.RunAsNonRoot=false for Sysbox, got %+v", podSpec.SecurityContext)
+	}
+	if podSpec.SecurityContext.RunAsUser == nil || *podSpec.SecurityContext.RunAsUser != 0 {
+		t.Errorf("expected pod SecurityContext.RunAsUser=0 for Sysbox, got %+v", podSpec.SecurityContext)
+	}
+
+	sc := podSpec.Containers[0].SecurityContext
+	if sc == nil || sc.RunAsUser == nil || *sc.RunAsUser != 0 {
+		t.Errorf("expected shell container RunAsUser=0, got %+v", sc)
+	}
+	// Crucially: NOT privileged by default. That is the whole point of
+	// Sysbox -- DinD/systemd/nested-k3s without a capability grant.
+	if sc.Privileged != nil && *sc.Privileged {
+		t.Error("Sysbox T2 shell container must NOT be privileged by default (DinD/systemd work via user-namespace isolation)")
 	}
 }
 
-func TestApplyT2PodShape_SetsPrivilegedSecurityContext(t *testing.T) {
+func TestApplyT2PodShape_PrivilegedOnlyForEbpfWorkloads(t *testing.T) {
 	podSpec := baseT1PodSpec()
-	applyT2PodShape(podSpec, ProvisionRequest{})
+	sysboxProvisioner().applyT2PodShape(podSpec, ProvisionRequest{PrivilegedWorkload: true})
 
 	sc := podSpec.Containers[0].SecurityContext
 	if sc == nil || sc.Privileged == nil || !*sc.Privileged {
-		t.Errorf("expected shell container Privileged=true (required for DinD/systemd/eBPF per doc §5.1), got %+v", sc)
+		t.Errorf("expected shell container Privileged=true when PrivilegedWorkload is set (eBPF-capability blueprint), got %+v", sc)
 	}
 }
 
 func TestApplyT2PodShape_UsesRequestedResourcesOverDefault(t *testing.T) {
 	podSpec := baseT1PodSpec()
-	applyT2PodShape(podSpec, ProvisionRequest{
+	sysboxProvisioner().applyT2PodShape(podSpec, ProvisionRequest{
 		Resources: ResourceSpec{CPU: "6", Memory: "12Gi"},
 	})
 
@@ -99,7 +157,7 @@ func TestApplyT2PodShape_UsesRequestedResourcesOverDefault(t *testing.T) {
 
 func TestApplyT2PodShape_DefaultsResourcesWhenUnset(t *testing.T) {
 	podSpec := baseT1PodSpec()
-	applyT2PodShape(podSpec, ProvisionRequest{})
+	sysboxProvisioner().applyT2PodShape(podSpec, ProvisionRequest{})
 
 	limits := podSpec.Containers[0].Resources.Limits
 	if limits.Cpu().String() != "8" {
@@ -151,14 +209,15 @@ func TestPSSLevelFor_T1RemainsRestricted(t *testing.T) {
 }
 
 func TestPSSLevelFor_T2IsPrivileged(t *testing.T) {
-	// Not a security regression: T2's isolation boundary is Kata's
-	// hardware virtualisation (own kernel), not PSS's container-capability
-	// restrictions -- see createNamespace's doc comment. This test exists
-	// specifically to catch the bug this pass found and fixed: a T2
-	// namespace stuck at PSS `restricted` rejects every T2 pod outright
-	// (Privileged: true is forbidden under `restricted`), before the
-	// scheduler even considers RuntimeClass/node placement.
+	// Still `privileged`, but for a Sysbox reason now: the T2 pod runs
+	// its shell container as root-in-userns (RunAsNonRoot=false,
+	// RunAsUser=0) and, for eBPF blueprints, privileged: true. PSS
+	// `restricted` and `baseline` both forbid RunAsUser=0 / privileged,
+	// so the namespace must be `privileged` or admission rejects the pod
+	// before scheduling. Sysbox -- not PSS -- is the isolation boundary
+	// here (user-namespace remapping), the same way Kata's VM was the
+	// boundary in the previous design.
 	if got := pssLevelFor(TierT2IsolatedMicroVM); got != "privileged" {
-		t.Errorf("expected T2 PSS level=privileged (required so PSS admission doesn't reject the privileged DinD container before scheduling), got %q", got)
+		t.Errorf("expected T2 PSS level=privileged (Sysbox shell runs as root-in-userns; PSS restricted/baseline would reject it), got %q", got)
 	}
 }

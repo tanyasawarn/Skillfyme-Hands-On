@@ -149,6 +149,17 @@ export class AttemptController {
     return this.hints.reveal(id, key);
   }
 
+  /**
+   * Doc §7.5 step 40 -- "just tell me" guided fallback. Only valid once
+   * the hint ladder is exhausted. Marks the attempt ASSISTED so this
+   * task contributes zero positive BKT evidence.
+   */
+  @Post(':id/tasks/:key/guided-fallback')
+  @UseGuards(AttemptOwnershipGuard)
+  async guidedFallback(@Param('id') id: string, @Param('key') key: string) {
+    return this.hints.guidedFallback(id, key);
+  }
+
   @Get(':id/files')
   @UseGuards(AttemptOwnershipGuard)
   async listFiles(@Param('id') id: string, @Query('dir') dir?: string) {

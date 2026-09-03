@@ -1,0 +1,45 @@
+# Phase 2 D — the platform deployment as one apply unit.
+#
+#   kubectl apply -k orchestrator/manifests/platform/
+#
+# BEFORE applying, populate the two config Secrets and the two mTLS
+# Secrets (they ship as empty placeholders so this kustomization is
+# valid on its own):
+#
+#   # 1. mTLS material (dev: from scripts/gen-certs.sh; prod: cert-manager)
+#   scripts/gen-certs.sh
+#   kubectl -n practiceengine-platform create secret generic orchestrator-mtls \
+#     --from-file=tls.crt=certs/orchestrator.crt \
+#     --from-file=tls.key=certs/orchestrator.key \
+#     --from-file=ca.crt=certs/ca.crt --dry-run=client -o yaml | kubectl apply -f -
+#   kubectl -n practiceengine-platform create secret generic practice-core-mtls \
+#     --from-file=tls.crt=certs/practice-core-client.crt \
+#     --from-file=tls.key=certs/practice-core-client.key \
+#     --from-file=ca.crt=certs/ca.crt --dry-run=client -o yaml | kubectl apply -f -
+#
+#   # 2. app config (copy secrets.env.example -> secrets.env, fill in, then:)
+#   kubectl -n practiceengine-platform create secret generic orchestrator-config \
+#     --from-env-file=secrets.orchestrator.env --dry-run=client -o yaml | kubectl apply -f -
+#   kubectl -n practiceengine-platform create secret generic practice-core-config \
+#     --from-env-file=secrets.practice-core.env --dry-run=client -o yaml | kubectl apply -f -
+#
+# Datastores (Postgres/Redis/NATS) are NOT in this kustomization — run
+# them however you prefer (managed, Helm, or simple Deployments). They
+# just need to be reachable at the URLs in the config Secrets and carry
+# the labels app=postgres / app=redis / app=nats for the egress policy.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 00-namespace.yaml
+  - 10-orchestrator-rbac.yaml
+  - 20-mtls-certs.yaml
+  - 30-orchestrator-deployment.yaml
+  - 40-practice-core-deployment.yaml
+  - 60-networkpolicies.yaml
+
+images:
+  - name: practiceengine/orchestrator
+    newTag: latest
+  - name: practiceengine/practice-core
+    newTag: latest

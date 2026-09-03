@@ -1,0 +1,22 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenySESandSNSSMS",
+      "Effect": "Deny",
+      "Action": [
+        "ses:SendEmail",
+        "ses:SendRawEmail",
+        "ses:SendBulkTemplatedEmail",
+        "ses:SendTemplatedEmail",
+        "sesv2:SendEmail",
+        "sesv2:SendBulkEmail",
+        "sns:Publish"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "Null": { "aws:ResourceTag/practice-engine:messaging-exception": "true" }
+      }
+    }
+  ]
+}

@@ -5,6 +5,7 @@ import type { Database } from '../../db/schema';
 import { BktService, type BktParams } from './bkt.service';
 import { MasteryConstants } from '../../common/constants';
 import { EloService, type EloOutcome } from './elo.service';
+import { computeReviewDueAt } from './spaced-repetition';
 
 export interface RecordEvidenceInput {
   userId: string;
@@ -234,6 +235,16 @@ export class MasteryService {
       });
 
       const band = this.bkt.bandFor(result.pAfter);
+      const now = new Date();
+      // PLAN.md G9 / doc §2.4 "review-due": once a skill reaches Competent+
+      // it enters the spaced-repetition rotation. review_due_at is set
+      // forward by a band-scaled interval (and lengthened on an on-time
+      // review); cleared to null while the skill is still below Competent.
+      const reviewDueAt = computeReviewDueAt(
+        band,
+        now,
+        existing?.review_due_at ?? null,
+      );
 
       await trx
         .insertInto('skill.skill_mastery')
@@ -241,16 +252,18 @@ export class MasteryService {
           user_id: input.userId,
           skill_id: input.skillId,
           p_mastery: result.pAfter,
-          last_evidence_at: new Date(),
+          last_evidence_at: now,
           evidence_count: 1,
           band,
+          review_due_at: reviewDueAt,
         })
         .onConflict((oc) =>
           oc.columns(['user_id', 'skill_id']).doUpdateSet({
             p_mastery: result.pAfter,
-            last_evidence_at: new Date(),
+            last_evidence_at: now,
             evidence_count: sql`skill.skill_mastery.evidence_count + 1`,
             band,
+            review_due_at: reviewDueAt,
           }),
         )
         .execute();

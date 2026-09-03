@@ -9,11 +9,16 @@ import { SkillModule } from './modules/skill/skill.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
 import { EventStoreModule } from './modules/event-store/event-store.module';
 import { AttemptModule } from './modules/attempt/attempt.module';
+import { ProjectModule } from './modules/project/project.module';
 import { EvaluationModule } from './modules/evaluation/evaluation.module';
 import { CurriculumModule } from './modules/curriculum/curriculum.module';
 import { RecommendationModule } from './modules/recommendation/recommendation.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { PrivacyModule } from './modules/privacy/privacy.module';
+import { MentorModule } from './modules/mentor/mentor.module';
+import { ExperimentModule } from './modules/experiment/experiment.module';
+import { AuthoringModule } from './modules/authoring/authoring.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuthGuard } from './modules/auth/auth.guard';
 import { RolesGuard } from './modules/auth/roles.guard';
@@ -40,10 +45,15 @@ import { MetricsModule } from './modules/metrics/metrics.module';
     EventStoreModule,
     EvaluationModule,
     AttemptModule,
+    ProjectModule,
     CurriculumModule,
     RecommendationModule,
     DashboardModule,
     AdminModule,
+    PrivacyModule,
+    MentorModule,
+    ExperimentModule,
+    AuthoringModule,
   ],
   controllers: [AppController],
   providers: [

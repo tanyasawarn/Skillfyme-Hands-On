@@ -1,0 +1,37 @@
+# Deterministic constraint sets handed to the grader as ground truth
+# (memory.md §12.3: grade "appropriateness given the stated constraints").
+# In production these come from the activity spec's milestone-1 task
+# description; here they are pinned so the calibration is reproducible.
+# Referenced by `constraints_id` in each case's front-matter.
+
+cs.web-api-tight-budget:
+  summary: >
+    A small public web API. Budget ceiling $40/month all-in. Team of 2
+    engineers, no dedicated ops. Expected peak ~30 requests/second,
+    read-heavy (roughly 28:2 read:write). Single-region deployment is
+    acceptable. p95 latency target < 400 ms. No PII or regulated data.
+  hard_limits:
+    - "monthly infra cost <= $40"
+    - "operable by 2 generalist engineers"
+    - "p95 < 400 ms at 30 req/s"
+  acceptable:
+    - "single region"
+    - "minutes-scale recovery time for the datastore"
+    - "at-least-once semantics where async is used"
+
+cs.event-ingest-mid-scale:
+  summary: >
+    An internal event-ingestion service feeding dashboards. ~2,000
+    events/second sustained, bursting to ~5,000/s. Budget ceiling
+    $600/month. Team of 4 engineers. 24-hour data retention is
+    sufficient. At-least-once delivery is acceptable (consumers dedupe by
+    event id). Consumers are internal aggregation dashboards querying the
+    last 1-24h.
+  hard_limits:
+    - "monthly infra cost <= $600"
+    - "sustain 2,000 events/s, absorb bursts to 5,000/s without data loss"
+    - "24h retention (longer not required)"
+  acceptable:
+    - "single region"
+    - "at-least-once delivery"
+    - "dashboard data may lag by the queue-drain time during a burst"

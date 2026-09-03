@@ -1,0 +1,31 @@
+# Phase 3 1.5 — real local ClickHouse for building + testing the Stage 4.1
+# ingestion consumer (B8).
+#
+#   docker compose --profile clickhouse \
+#     -f docker-compose.yml \
+#     -f infra/clickhouse/compose/docker-compose.clickhouse.yml up -d
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    profiles: ["clickhouse"]
+    environment:
+      CLICKHOUSE_DB: practice_analytics
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./infra/clickhouse/compose/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "8123:8123"   # HTTP
+      - "9009:9000"   # native
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  clickhouse_data:

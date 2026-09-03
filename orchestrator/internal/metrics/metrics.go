@@ -140,6 +140,62 @@ var (
 		Name:      "ws_connections_total",
 		Help:      "Terminal WebSocket connections accepted by the gateway.",
 	})
+
+	// --- Phase 3: T3 cloud account lifecycle (Stage 2.x) ---
+
+	// AccountPoolClaimTotal counts Account Pool Manager claim attempts by
+	// region and outcome. hit / (hit+miss+stale+error) is claim health.
+	AccountPoolClaimTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "account_pool_claim_total",
+		Help:      "T3 sandbox-account claim attempts by region and outcome.",
+	}, []string{"region", "result"}) // result: hit | miss | stale | error
+
+	// AccountPoolReleaseTotal counts release-path terminal outcomes.
+	// quarantined > 0 means nuke+verify disagreed — a human is paged.
+	AccountPoolReleaseTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "account_pool_release_total",
+		Help:      "T3 sandbox-account releases by terminal state.",
+	}, []string{"result"}) // result: available | quarantined
+
+	// AccountPoolDepth is the current AVAILABLE pool depth per region.
+	AccountPoolDepth = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "account_pool_depth",
+		Help:      "Claimable (AVAILABLE) T3 sandbox accounts per region.",
+	}, []string{"region"})
+
+	// CloudBudgetActionTotal counts budget-enforcement actions on T3
+	// accounts by threshold percent and action.
+	CloudBudgetActionTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "cloud_budget_action_total",
+		Help:      "T3 per-account budget-enforcement actions.",
+	}, []string{"percent", "action"}) // action: warn | revoke_and_terminate
+
+	// CloudLaunchCapRejectTotal counts T3 Provision calls rejected by the
+	// concurrent-launch cap (2.3).
+	CloudLaunchCapRejectTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "cloud_launch_cap_reject_total",
+		Help:      "T3 provision requests rejected because the concurrent-launch cap was hit.",
+	})
+
+	// CredBrokerRefreshTotal counts STS credential refreshes by outcome.
+	CredBrokerRefreshTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "cred_broker_refresh_total",
+		Help:      "STS credential-broker refresh attempts by outcome.",
+	}, []string{"result"}) // result: ok | error | stopped
+
+	// CloudCostRowsTotal counts usage_meter.cloud_cost_usd rows written
+	// by the Cost Explorer / CUR poll (2.5), by source.
+	CloudCostRowsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "cloud_cost_rows_total",
+		Help:      "usage_meter cloud-cost rows written, by source.",
+	}, []string{"source"}) // source: ce | cur
 )
 
 // Handler returns the HTTP handler that serves the registered metrics in

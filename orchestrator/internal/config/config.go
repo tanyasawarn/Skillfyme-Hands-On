@@ -49,6 +49,16 @@ type Config struct {
 	GVisorEnabled bool
 	T2Enabled     bool
 
+	// T2RuntimeClass is the RuntimeClass a T2 (isolated-workload) pod is
+	// scheduled under. Default "sysbox-runc" (Sysbox on the shared T1
+	// node pool -- real DinD/systemd/nested-k3s without a dedicated metal
+	// pool or a microVM, the ₹100/user cost decision). Set to "kata" plus
+	// the infra/practice-cluster/t2-nodepool-kata/ pool for hardware-VM
+	// isolation once concurrent T2 volume makes that economical. Empty
+	// string = no runtimeClassName set (local dev with no Sysbox degrades
+	// to a plain container instead of failing to schedule).
+	T2RuntimeClass string
+
 	// Session recording (doc §5.4 asciicast-to-S3)
 	RecordingS3Bucket      string
 	S3EndpointURL          string
@@ -57,6 +67,42 @@ type Config struct {
 	// Warm pool (doc §5.5)
 	WarmPoolTargets      string
 	WarmPoolFillInterval time.Duration
+
+	// Phase 3 — T3 cloud account lifecycle (Stage 2.x). Everything here
+	// is opt-in: when CloudAccountsEnabled is false (the default) the
+	// orchestrator wires cloudaws.FakeClient and does NOT start the
+	// account-pool filler / nightly sweeper / cost pollers, so the
+	// service runs unchanged without a Platform AWS account. Setting
+	// CLOUD_ACCOUNTS_ENABLED=true + the AWS_* / PLATFORM_* vars switches
+	// every Stage 2 component to the real AWS path with no code change.
+	CloudAccountsEnabled bool
+	AWSRegion            string
+	// PlatformAccountID is the Platform (payer-side) account that assumes
+	// PlatformNukeRole in each sandbox and hosts the OIDC IdP.
+	PlatformAccountID string
+	// PlatformIdPURL / PlatformIdPClientID identify the platform OIDC
+	// issuer the STS broker exchanges tokens against (Stage 2.1 / 1.3).
+	PlatformIdPURL      string
+	PlatformIdPClientID string
+	// AccountPoolTargets: "region:count,region:count" warm-pool depth
+	// per SCP-allowed region (D-P3-5). Empty ⇒ no filler.
+	AccountPoolTargets      string
+	AccountPoolFillInterval time.Duration
+	CloudNukeSweepInterval  time.Duration
+	CloudCostHourlyInterval time.Duration
+	CloudCostDailyInterval  time.Duration
+	// T3LaunchCap bounds concurrent IN_USE sandbox accounts (Stage 2.3).
+	// 0 = uncapped.
+	T3LaunchCap int
+	// CredBrokerTTL / CredBrokerRefreshFraction control the STS broker
+	// (Stage 2.1). Defaults: 1h / 0.5.
+	CredBrokerTTL             time.Duration
+	CredBrokerRefreshFraction float64
+	// SnapshotS3Bucket is where Stage 3.3's IaC-state manifests land.
+	SnapshotS3Bucket string
+	// PagerWebhookURL is the PagerDuty/Opsgenie webhook the quarantine
+	// pager posts to (Stage 2.2). Empty ⇒ log-only.
+	PagerWebhookURL string
 
 	// Auth (closes the access-control gap PHASE2_CLOSEOUT.md flagged)
 	SharedSecret string
@@ -120,7 +166,8 @@ func Load() Config {
 		// PLAN.md Phase 2: "Dev A should not start T2 until Phase 1's
 		// reaper/teardown has been running with zero orphans for a
 		// sustained period." Off by default.
-		T2Enabled: getEnvBool("ORCHESTRATOR_T2_ENABLED", false),
+		T2Enabled:      getEnvBool("ORCHESTRATOR_T2_ENABLED", false),
+		T2RuntimeClass: getEnv("ORCHESTRATOR_T2_RUNTIME_CLASS", "sysbox-runc"),
 
 		RecordingS3Bucket:      getEnv("RECORDING_S3_BUCKET", ""),
 		S3EndpointURL:          getEnv("S3_ENDPOINT_URL", ""),
@@ -128,6 +175,23 @@ func Load() Config {
 
 		WarmPoolTargets:      getEnv("WARM_POOL_TARGETS", ""),
 		WarmPoolFillInterval: getEnvDuration("WARM_POOL_FILL_INTERVAL", 20*time.Second),
+
+		// Phase 3 T3 cloud account lifecycle (Stage 2.x). Opt-in.
+		CloudAccountsEnabled:      getEnvBool("CLOUD_ACCOUNTS_ENABLED", false),
+		AWSRegion:                 getEnv("AWS_REGION", ""),
+		PlatformAccountID:         getEnv("PLATFORM_ACCOUNT_ID", ""),
+		PlatformIdPURL:            getEnv("PLATFORM_IDP_URL", ""),
+		PlatformIdPClientID:       getEnv("PLATFORM_IDP_CLIENT_ID", ""),
+		AccountPoolTargets:        getEnv("ACCOUNT_POOL_TARGETS", ""),
+		AccountPoolFillInterval:   getEnvDuration("ACCOUNT_POOL_FILL_INTERVAL", 5*time.Minute),
+		CloudNukeSweepInterval:    getEnvDuration("CLOUD_NUKE_SWEEP_INTERVAL", 24*time.Hour),
+		CloudCostHourlyInterval:   getEnvDuration("CLOUD_COST_HOURLY_INTERVAL", time.Hour),
+		CloudCostDailyInterval:    getEnvDuration("CLOUD_COST_DAILY_INTERVAL", 24*time.Hour),
+		T3LaunchCap:               getEnvInt("T3_LAUNCH_CAP", 0),
+		CredBrokerTTL:             getEnvDuration("CRED_BROKER_TTL", time.Hour),
+		CredBrokerRefreshFraction: getEnvFloat("CRED_BROKER_REFRESH_FRACTION", 0.5),
+		SnapshotS3Bucket:          getEnv("SNAPSHOT_S3_BUCKET", ""),
+		PagerWebhookURL:           getEnv("PAGER_WEBHOOK_URL", ""),
 
 		// Closes the access-control gap PHASE2_CLOSEOUT.md flagged:
 		// every RPC previously had no caller-identity check at all.
@@ -176,6 +240,15 @@ func getEnvFloat(key string, fallback float64) float64 {
 	if v := os.Getenv(key); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			return f
+		}
+	}
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			return i
 		}
 	}
 	return fallback

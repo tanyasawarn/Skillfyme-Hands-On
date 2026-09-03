@@ -1,0 +1,12 @@
+apiVersion: v2
+name: platform-git-hosting
+description: >
+  Phase 3 1.4 / B9 — per-learner platform Git hosting (self-hosted Forgejo).
+  A thin wrapper over the upstream Forgejo image: a StatefulSet with a PVC
+  for permanent repo storage, an Ingress, and Postgres-backed metadata
+  (RDS in production, see ../terraform). NOT applied yet — needs a cluster
+  with an ingress controller and a StorageClass. Values below are the
+  production defaults; secrets come from an external Secret.
+type: application
+version: 0.1.0
+appVersion: "9"

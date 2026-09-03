@@ -188,7 +188,10 @@ describe('RecommendationService (integration, real Postgres) — doc §2.5 reduc
       .execute();
     expect(rows).toHaveLength(1);
     expect(rows[0].reason_code).toBe('CURRICULUM_ADJACENT');
-    expect(rows[0].ranker_version).toBe('rules-v1');
+    // rules-v2: the recommender now runs all 5 doc §2.5 candidate sources
+    // (curriculum-adjacent + remediation + spaced-repetition + progression
+    // + unblocking) with cross-source weighted scoring (PLAN.md G8/G9/G10).
+    expect(rows[0].ranker_version).toBe('rules-v2');
   });
 
   it('excludes activities the learner has already attempted', async () => {

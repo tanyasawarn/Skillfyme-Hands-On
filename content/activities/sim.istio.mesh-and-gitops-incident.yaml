@@ -1,0 +1,221 @@
+id: sim.istio.mesh-and-gitops-incident
+version: 1
+mode: PRODUCTION_SIM
+status: DRAFT
+
+meta:
+  title: "INC-8110: mesh traffic broken and GitOps drifted"
+  summary: >
+    An mTLS mode mismatch is causing sidecar 503s between two services,
+    a VirtualService weight edit sent 0% of traffic to a canary that
+    should be live, and an Argo CD Application has drifted OutOfSync
+    after a manual hotfix -- three service-mesh / GitOps failures on one
+    incident. Diagnose and fix all three.
+  difficulty_level: L4
+  estimated_minutes: 45
+  locale: en
+  authors: [content-team]
+  tags: [istio, service-mesh, gitops, argocd, incident-response, troubleshooting]
+
+curriculum:
+  primary_topic: topic.devops.cloud-k8s-serverless
+  also_relevant: [topic.sre.incident-diagnosis, topic.cloud.zero-trust-security]
+  courses: [course.sre]
+
+skills:
+  - skill: k8s.troubleshooting
+    weight: 0.4
+    primary: true
+    bloom: analyze
+  - skill: cloud.zero-trust-security
+    weight: 0.25
+    primary: false
+    bloom: analyze
+  - skill: k8s.production-deployments
+    weight: 0.2
+    primary: false
+    bloom: analyze
+  - skill: sre.postmortem-authorship
+    weight: 0.15
+    primary: false
+    bloom: create
+
+prerequisites:
+  hard: [k8s.troubleshooting]
+  soft: [k8s.production-deployments, cloud.zero-trust-security]
+
+objectives:
+  - Diagnose an Istio mTLS mode mismatch causing sidecar-originated 503s
+  - Fix a VirtualService whose route weights sum to zero
+  - Reconcile an Argo CD Application that drifted OutOfSync from Git
+  - Write a root-cause/timeline/remediation/prevention incident note
+
+environment:
+  # Needs a real service mesh (Istio CRDs + sidecars), a nested Argo CD,
+  # and a Git server -- none of which fit a T1 gVisor pod. This is the
+  # canonical T2 (isolated microVM / Sysbox) simulation. The activity
+  # schema's tier enum names this ISOLATED_VM; the orchestrator resolves
+  # it to TIER_T2_ISOLATED_MICROVM (Sysbox runtime under the ₹100/user
+  # decision).
+  tier: ISOLATED_VM
+  blueprint: bp.k8s-multinode.v1
+  resources:
+    cpu: "4"
+    memory: 8Gi
+    disk: 12Gi
+  ttl_minutes: 45
+  idle_timeout_minutes: 10
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.istio-minimal.v1
+    - fixture: fx.gitea-repo.v1
+    - fixture: fx.argocd-minimal.v1
+  cost_budget_usd: 0.35
+
+surfaces: [terminal, editor, k8s_dashboard_readonly]
+
+faults:
+  - id: f.istio.mtls-mode-mismatch
+    params: { destinationrule: checkout-dr }
+    apply_at: T0
+  - id: f.istio.virtualservice-weight-sum-invalid
+    params: { virtualservice: checkout-vs, weight_a: 0, weight_b: 0 }
+    apply_at: T0
+  - id: f.gitops.argocd-out-of-sync-manual-drift
+    params: { application: practice-app }
+    apply_at: T0
+
+process_signals:
+  diagnostic_efficiency:
+    good_actions:
+      - "kubectl get peerauthentication"
+      - "kubectl get destinationrule"
+      - "kubectl get virtualservice"
+      - "istioctl analyze"
+      - "kubectl get application"
+      - "kubectl describe application"
+    bad_actions:
+      - "kubectl delete peerauthentication"
+      - "kubectl delete virtualservice"
+      - "kubectl delete application"
+      - "istioctl uninstall"
+    scoring: ratio_and_ordering
+  blast_radius:
+    forbidden:
+      - "kubectl delete ns"
+      - "kubectl delete namespace"
+      - "istioctl uninstall"
+
+tasks:
+  - key: t1
+    title: "INC-8110 (P2): checkout calls 503 from the sidecar"
+    required: true
+    instructions_md: |
+      **INC-8110 — P2.** Calls from `frontend` to `checkout` return a
+      clean `503` that originates from the caller's own Envoy sidecar,
+      not from the checkout application. This started right after a
+      security change to enforce mTLS.
+
+      Diagnose the mTLS mode mismatch and restore service-to-service
+      traffic.
+    validators:
+      - id: v.checkout-dr-tls-consistent
+        type: K8S_ASSERT
+        run: "kubectl get destinationrule checkout-dr -o jsonpath='{.spec.trafficPolicy.tls.mode}'"
+        expect:
+          jsonpath: "$"
+          op: in
+          value: ["ISTIO_MUTUAL", "MUTUAL"]
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "The DestinationRule's tls.mode still doesn't agree with the PeerAuthentication policy. STRICT PeerAuthentication requires the client side (DestinationRule) to use ISTIO_MUTUAL, not DISABLE/SIMPLE."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "A 503 from the client's OWN sidecar (not the server) plus a STRICT PeerAuthentication means the client isn't offering a mesh cert -- the DestinationRule's trafficPolicy.tls.mode is telling Envoy to connect in plaintext or one-way TLS."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: "the canary VirtualService sends 0% of traffic anywhere"
+    required: true
+    instructions_md: |
+      A `checkout-vs` VirtualService was edited to shift traffic to a
+      canary, but 100% of traffic is still going to the stable subset
+      and the canary sees nothing. `istioctl analyze` reports IST0106.
+
+      Fix the route weights.
+    validators:
+      - id: v.checkout-vs-weights-valid
+        type: SHELL_JSON
+        run: "kubectl get virtualservice checkout-vs -o json | jq '[.spec.http[0].route[].weight] | add'"
+        expect:
+          jsonpath: "$"
+          op: eq
+          value: 100
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "The route weights on checkout-vs still don't sum to 100. Every route in an HTTP match block must have weights that total exactly 100, or Istio ignores the split entirely."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "IST0106 / 'total destination weight = 0' means every route's weight in that match block is 0 -- Istio falls back to the first destination. Set the weights so they sum to 100 (e.g. 90/10 for a small canary)."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t3
+    title: "the practice-app Argo CD Application is OutOfSync"
+    required: true
+    instructions_md: |
+      `kubectl get application practice-app -n argocd` shows
+      `OutOfSync`. Someone applied a manual hotfix to the live object
+      during the incident and Argo CD's auto-sync appears to be off, so
+      it never reconciled back.
+
+      Reconcile the Application with Git and restore auto-sync.
+    validators:
+      - id: v.practice-app-synced
+        type: K8S_ASSERT
+        run: "kubectl get application practice-app -n argocd -o jsonpath='{.status.sync.status}'"
+        expect:
+          jsonpath: "$"
+          op: eq
+          value: "Synced"
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "practice-app is still OutOfSync. `kubectl get application practice-app -n argocd -o yaml` shows the diff between live and Git; re-enable spec.syncPolicy.automated (or trigger a sync) so it reconciles."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "OutOfSync with syncPolicy.automated absent means Argo CD sees the drift but won't act on it. Re-enabling automated sync (or a one-off sync) makes it converge the live object back to the Git-declared manifest."
+    solution_apply: scripts/t3_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+artifacts_required:
+  - key: incident-note
+    type: MARKDOWN
+    rubric: rub.incident-note.v2
+
+scoring:
+  profile: sp.production-sim.default
+
+ai_mentor:
+  persona: senior_engineer
+  max_hints: 3
+  token_budget: 10000
+  solution_visibility: HIDDEN
+  policy: policy.sim.socratic.v1
+
+reference_solution:
+  repo_path: solutions/sim.istio.mesh-and-gitops-incident/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

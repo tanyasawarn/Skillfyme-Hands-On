@@ -69,7 +69,7 @@ func setupNetworkPolicyEnforcementTest(t *testing.T) (*kubernetes.Clientset, *k8
 		t.Skipf("skipping: k8s cluster unreachable (dev stack not running?): %v", err)
 	}
 
-	return clientset, k8s.NewProvisioner(clientset, restConfig, false)
+	return clientset, k8s.NewProvisioner(clientset, restConfig, k8s.ProvisionerConfig{})
 }
 
 // pingPod execs a short-timeout wget from callerPod against targetIP,

@@ -1,0 +1,8 @@
+# OpenTofu / Terraform local working files — never commit these
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log

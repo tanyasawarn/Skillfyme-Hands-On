@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.practiceengine.internal/events/account_nuked.schema.json",
+  "title": "AccountNukedPayload",
+  "description": "Phase 3 (memory.md §5.3). Produced by the Orchestrator's Account Pool Manager after aws-nuke + the mandatory verification pass. verified:true means the account returned to AVAILABLE; verified:false routes to ACCOUNT_QUARANTINED instead.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["cloud_account_id", "verified", "resources_remaining"],
+  "properties": {
+    "cloud_account_id": { "type": "string" },
+    "verified": { "type": "boolean", "description": "true iff post-nuke enumeration (Config + Resource Explorer + blind-spot list) found zero resources" },
+    "resources_remaining": { "type": "integer", "minimum": 0, "description": "count found by the verification pass; must be 0 for verified:true" },
+    "trigger": { "type": "string", "enum": ["release", "ttl", "idle", "submit", "sweeper"] }
+  }
+}

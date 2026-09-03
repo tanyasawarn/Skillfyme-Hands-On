@@ -109,6 +109,19 @@ type ProvisionRequest struct {
 	Image         string // base image for the shell container (image strategy, M1.11)
 	Resources     ResourceSpec
 	NetworkPolicy string // reserved for blueprint-declared egress allowlist domains (§9.2); default-deny is always applied regardless
+
+	// PrivilegedWorkload, when true on a T2 request, additionally sets
+	// securityContext.privileged on the shell container. Sysbox already
+	// delivers real DinD / systemd / nested multi-node k3s WITHOUT
+	// privileged (its whole point -- user-namespace isolation, not a
+	// capability grant), so the default T2 pod is unprivileged. The only
+	// T2 workloads that still need privileged are the handful of eBPF
+	// program types Sysbox can't load unprivileged (LSM-BPF, some XDP);
+	// a blueprint that declares an eBPF capability sets this so those
+	// sims work, and pays the isolation cost (a privileged container on a
+	// shared kernel) only for that content. Ignored for T1 (PSS
+	// `restricted` forbids privileged there and nothing needs it).
+	PrivilegedWorkload bool
 }
 
 // Provisioner implements doc §5.2's namespace-per-environment template:
@@ -118,22 +131,50 @@ type ProvisionRequest struct {
 type Provisioner struct {
 	clientset  *kubernetes.Clientset
 	restConfig *rest.Config
-
-	// gVisorEnabled gates whether T1 pods get RuntimeClassName: gvisor.
-	// A cluster-wide capability fact (does this cluster's node pool
-	// actually have gVisor installed?), not a per-request choice --
-	// hence a Provisioner-level field, not a ProvisionRequest field like
-	// Tier. Defaults false (the zero value): hardcoding a RuntimeClass
-	// that doesn't exist on the node makes every Provision() call fail
-	// scheduling, so this must be an explicit opt-in from an operator who
-	// has confirmed gVisor is actually installed on the T1 node pool --
-	// same pattern as Server.t2Enabled (internal/orchestrator/server.go)
-	// and ORCHESTRATOR_T2_ENABLED.
-	gVisorEnabled bool
+	cfg        ProvisionerConfig
 }
 
-func NewProvisioner(clientset *kubernetes.Clientset, restConfig *rest.Config, gVisorEnabled bool) *Provisioner {
-	return &Provisioner{clientset: clientset, restConfig: restConfig, gVisorEnabled: gVisorEnabled}
+// ProvisionerConfig carries the cluster-wide capability facts the pod
+// shape depends on -- "does this cluster's node pool actually have X
+// installed?" -- as opposed to per-request choices (which live on
+// ProvisionRequest). Grouped into one struct so adding a new capability
+// knob (gVisor, then the T2 runtime, and whatever comes next) doesn't
+// churn NewProvisioner's signature and every test call site each time.
+type ProvisionerConfig struct {
+	// GVisorEnabled gates whether T1 pods get RuntimeClassName: gvisor.
+	// Defaults false: hardcoding a RuntimeClass that doesn't exist on the
+	// node makes every Provision() call fail scheduling, so this must be
+	// an explicit opt-in from an operator who has confirmed gVisor is
+	// actually installed on the T1 node pool -- same pattern as
+	// Server.t2Enabled (internal/orchestrator/server.go) and
+	// ORCHESTRATOR_T2_ENABLED.
+	GVisorEnabled bool
+
+	// T2RuntimeClass is the RuntimeClass name a T2 (isolated-workload)
+	// pod is scheduled under. As of the ₹100/user cost decision this is
+	// "sysbox-runc" (Sysbox: real DinD/systemd/nested-k3s on the SAME
+	// shared node pool as T1, no dedicated metal, no microVM) rather than
+	// "kata" (hardware-virtualised microVM on a dedicated bare-metal
+	// pool -- kept as the documented scale-up path in
+	// infra/practice-cluster/t2-nodepool-kata/, viable only once
+	// concurrent T2 volume makes metal packing efficient). Configurable
+	// via ORCHESTRATOR_T2_RUNTIME_CLASS so the switch back to "kata" (or
+	// forward to something else) is an operator decision, not a rebuild.
+	// Empty string means the same "no runtimeClassName set" behavior the
+	// T1 path has when gVisor is disabled: the pod runs under the node's
+	// default runtime -- honest for a local dev cluster with no Sysbox,
+	// where it degrades to a plain (non-isolated) container rather than
+	// failing to schedule.
+	T2RuntimeClass string
+}
+
+// T2RuntimeClassDefault is the RuntimeClass a T2 pod uses unless an
+// operator overrides ORCHESTRATOR_T2_RUNTIME_CLASS. See
+// ProvisionerConfig.T2RuntimeClass for why Sysbox, not Kata.
+const T2RuntimeClassDefault = "sysbox-runc"
+
+func NewProvisioner(clientset *kubernetes.Clientset, restConfig *rest.Config, cfg ProvisionerConfig) *Provisioner {
+	return &Provisioner{clientset: clientset, restConfig: restConfig, cfg: cfg}
 }
 
 // Clientset exposes the underlying K8s client for packages that need to
@@ -635,8 +676,8 @@ func (p *Provisioner) createWorkspacePod(ctx context.Context, ns string, req Pro
 	}
 
 	if req.Tier == TierT2IsolatedMicroVM {
-		applyT2PodShape(&podSpec, req)
-	} else if rc := runtimeClassForT1(p.gVisorEnabled); rc != nil {
+		p.applyT2PodShape(&podSpec, req)
+	} else if rc := runtimeClassForT1(p.cfg.GVisorEnabled); rc != nil {
 		podSpec.RuntimeClassName = rc
 	}
 
@@ -657,48 +698,79 @@ func (p *Provisioner) createWorkspacePod(ctx context.Context, ns string, req Pro
 // kept as a small, separate, tier-specific step (rather than threading
 // if req.Tier == TierT2 branches through every field above) so the T1
 // path stays exactly what it was before T2 existed, and a reviewer can
-// see the complete T2 delta in one place. Same local-dev caveat as T1's
-// gvisor RuntimeClass: RuntimeClassName/nodeSelector/tolerations below
-// reference a "kata" handler and "practiceengine.dev/tier2: true" node
-// label that don't exist on this project's local k3s cluster -- setting
-// them makes a local T2 Provision() call fail scheduling (FailedScheduling,
-// same failure mode T1's manifest doc already explains), which is the
-// correct, honest behavior until a real T2-capable node pool exists
-// rather than silently falling back to an unsandboxed T2 pod.
-func applyT2PodShape(podSpec *corev1.PodSpec, req ProvisionRequest) {
-	privileged := true
+// see the complete T2 delta in one place.
+//
+// Cost decision (₹100/user ceiling): T2 runs under the **Sysbox**
+// runtime (p.cfg.T2RuntimeClass, default "sysbox-runc") on the SAME
+// shared node pool as T1 -- NOT on a dedicated Kata bare-metal pool.
+// Consequences for this function versus the old Kata shape:
+//
+//   - RuntimeClassName is p.cfg.T2RuntimeClass, not a hardcoded "kata".
+//     Empty config value -> no runtimeClassName set (local dev with no
+//     Sysbox degrades to a plain container, same honest-degradation
+//     stance runtimeClassForT1 takes when gVisor is off -- it does NOT
+//     fail to schedule, unlike the old Kata assignment).
+//   - NO nodeSelector / toleration for a "practiceengine.dev/tier2"
+//     metal pool -- there is no such pool. A T2 pod schedules onto the
+//     ordinary learner nodes alongside T1 pods. (The learner-node
+//     toleration itself is added by createWorkspacePod for every
+//     workspace pod regardless of tier, so nothing to add here.)
+//   - privileged is NOT set by default. Sysbox delivers real DinD /
+//     systemd / nested multi-node k3s via user-namespace isolation
+//     WITHOUT any capability grant -- that is the entire reason it fits
+//     this budget and this threat model. Only a blueprint that declares
+//     an eBPF capability (req.PrivilegedWorkload) gets privileged, and
+//     only its shell container, so the shared-kernel exposure is paid
+//     for exactly the content that needs it.
+//   - The T2 resource ceiling (DefaultT2Resources, 8/16) still applies
+//     as the LimitRange max; req.Resources still wins when set (a
+//     cost-optimised blueprint requests 4/8, docs/t2-cost-optimization.md
+//     §2.4).
+//
+// The Kata shape is preserved in git history and documented as the
+// scale-up path in infra/practice-cluster/t2-nodepool-kata/README.md;
+// switching back is ORCHESTRATOR_T2_RUNTIME_CLASS=kata plus that pool.
+func (p *Provisioner) applyT2PodShape(podSpec *corev1.PodSpec, req ProvisionRequest) {
+	if rc := p.cfg.T2RuntimeClass; rc != "" {
+		podSpec.RuntimeClassName = stringPtr(rc)
+	}
 
-	// Doc §5.2's T1 comment pattern, mirrored for T2: safe to reference
-	// even before a Kata-capable node exists (creating the RuntimeClass
-	// object doesn't require the handler to be installed anywhere), but
-	// a pod that references it won't schedule until one is.
-	podSpec.RuntimeClassName = stringPtr("kata")
-
-	// See manifests/t2/node-pool-taint.md -- the T2 node pool's taint
-	// (workload=learner-t2:NoSchedule) exists only in a real
-	// multi-node deployment; this toleration + nodeSelector pair is
-	// inert (matches nothing) on the local single-node cluster, same as
-	// T1's undocumented equivalent was before this pass, but now made
-	// explicit rather than silently absent.
-	podSpec.NodeSelector = map[string]string{"practiceengine.dev/tier2": "true"}
-	podSpec.Tolerations = append(podSpec.Tolerations, corev1.Toleration{
-		Key:      "workload",
-		Operator: corev1.TolerationOpEqual,
-		Value:    "learner-t2",
-		Effect:   corev1.TaintEffectNoSchedule,
-	})
+	// Sysbox needs the workspace container to run as root INSIDE its own
+	// user namespace -- systemd-as-PID-1 and dockerd both expect uid 0.
+	// This is NOT a host-privilege grant: Sysbox remaps that in-container
+	// uid 0 to an unprivileged host uid range. Both the pod-level and the
+	// container-level SecurityContext createWorkspacePod set
+	// (RestrictedPodSecurityContext / RestrictedContainerSecurityContext:
+	// RunAsNonRoot=true, RunAsUser=1000, drop ALL caps) have to be
+	// relaxed here or the container can't come up. The T2 namespace is
+	// already PSS `privileged` (pssLevelFor), so admission permits this.
+	runAsNonRoot := false
+	var runAsUser int64 = 0
+	podSpec.SecurityContext = &corev1.PodSecurityContext{
+		RunAsNonRoot: &runAsNonRoot,
+		RunAsUser:    &runAsUser,
+		SeccompProfile: &corev1.SeccompProfile{
+			// Sysbox installs its own seccomp handling; RuntimeDefault is
+			// still the right baseline and Sysbox loosens it internally.
+			Type: corev1.SeccompProfileTypeRuntimeDefault,
+		},
+	}
 
 	shell := &podSpec.Containers[0]
-	// Doc §5.1: T2 supports "Docker-in-Docker with real kernel
-	// features... systemd, eBPF, kernel tuning" -- none of which run
-	// unprivileged in any container runtime today. Kata's hardware
-	// virtualisation (its own kernel, doc's isolation column) is the
-	// actual security boundary here, not the container's own
-	// capability set, which is why this is safe on T2 where it would
-	// be a real escape risk against T1's shared-kernel gVisor sandbox.
+	allowPrivilegeEscalation := true // systemd/dockerd inside need setuid helpers
 	shell.SecurityContext = &corev1.SecurityContext{
-		Privileged: &privileged,
+		RunAsNonRoot:             &runAsNonRoot,
+		RunAsUser:                &runAsUser,
+		AllowPrivilegeEscalation: &allowPrivilegeEscalation,
 	}
+
+	// eBPF-capability blueprints only: additionally privileged, on the
+	// shell container alone. See ProvisionRequest.PrivilegedWorkload.
+	if req.PrivilegedWorkload {
+		privileged := true
+		shell.SecurityContext.Privileged = &privileged
+	}
+
 	// T2's LimitRange ceiling (applyLimitRange) is DefaultT2Resources --
 	// use req.Resources directly rather than T1's DefaultT1Resources
 	// fallback, so a T2 ProvisionRequest that sets real resource values

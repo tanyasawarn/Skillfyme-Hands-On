@@ -1,0 +1,80 @@
+# Phase 3 1.4 / B9 — real local Forgejo for developing + testing
+# practice-core/src/modules/project/git.service.ts.
+#
+#   docker compose --profile git-hosting \
+#     -f docker-compose.yml \
+#     -f infra/git-hosting/compose/docker-compose.git-hosting.yml up -d
+#
+# Forgejo metadata lives in the same compose Postgres (a `forgejo`
+# database, created by the init below); repo blobs live in a named
+# volume `forgejo_data` — permanent retention, never pruned by the
+# platform.
+services:
+  forgejo-db-init:
+    image: postgres:16
+    profiles: ["git-hosting"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        export PGPASSWORD=practice
+        if psql -h postgres -U practice -d practice_engine -tAc "SELECT 1 FROM pg_database WHERE datname='forgejo'" | grep -q 1; then
+          echo "database 'forgejo' already exists"
+        else
+          psql -h postgres -U practice -d practice_engine -v ON_ERROR_STOP=1 -c "CREATE DATABASE forgejo"
+          echo "created database 'forgejo'"
+        fi
+    restart: "no"
+
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:9
+    profiles: ["git-hosting"]
+    depends_on:
+      forgejo-db-init:
+        condition: service_completed_successfully
+    environment:
+      # Forgejo needs to write app.ini (SECRET_KEY / INTERNAL_TOKEN are
+      # generated on first boot), so config goes in as FORGEJO__* env
+      # rather than a read-only file mount. Mirrors
+      # infra/git-hosting/compose/forgejo-app.ini section-for-section —
+      # keep the two in sync; the .ini is the human-readable reference
+      # and what the production helm chart's values are derived from.
+      FORGEJO__database__DB_TYPE: postgres
+      FORGEJO__database__HOST: postgres:5432
+      FORGEJO__database__NAME: forgejo
+      FORGEJO__database__USER: practice
+      FORGEJO__database__PASSWD: practice
+      FORGEJO__server__DOMAIN: localhost
+      FORGEJO__server__HTTP_PORT: "3000"
+      FORGEJO__server__ROOT_URL: http://localhost:3300/
+      # practice-core's git.service.ts pushes over HTTP with a scoped
+      # token — no SSH needed for the local dev deploy. (Production
+      # helm/ keeps the built-in SSH server on for learner convenience.)
+      FORGEJO__server__DISABLE_SSH: "true"
+      FORGEJO__server__START_SSH_SERVER: "false"
+      FORGEJO__server__LFS_START_SERVER: "true"
+      FORGEJO__security__INSTALL_LOCK: "true"
+      FORGEJO__security__MIN_PASSWORD_LENGTH: "12"
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
+      FORGEJO__service__REQUIRE_SIGNIN_VIEW: "true"
+      FORGEJO__service__ENABLE_BASIC_AUTHENTICATION: "true"
+      FORGEJO__service__DEFAULT_KEEP_EMAIL_PRIVATE: "true"
+      FORGEJO__service__DEFAULT_ALLOW_CREATE_ORGANIZATION: "false"
+      FORGEJO__repository__DEFAULT_PRIVATE: private
+      FORGEJO__repository__DEFAULT_BRANCH: main
+      FORGEJO__api__ENABLE_SWAGGER: "true"
+    volumes:
+      - forgejo_data:/data
+    ports:
+      - "3300:3000" # web + API (practice-core uses HTTP + token)
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/api/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  forgejo_data:

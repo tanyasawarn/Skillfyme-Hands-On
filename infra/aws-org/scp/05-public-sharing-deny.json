@@ -1,0 +1,45 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyPublicS3",
+      "Effect": "Deny",
+      "Action": [
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutAccountPublicAccessBlock",
+        "s3:PutBucketAcl",
+        "s3:PutObjectAcl",
+        "s3:PutBucketPolicy"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "s3:x-amz-acl": ["public-read", "public-read-write", "authenticated-read"]
+        }
+      }
+    },
+    {
+      "Sid": "DenyDisablingS3AccountPublicAccessBlock",
+      "Effect": "Deny",
+      "Action": ["s3:PutAccountPublicAccessBlock"],
+      "Resource": "*",
+      "Condition": {
+        "Bool": { "s3:PublicAccessBlockConfiguration:BlockPublicAcls": "false" }
+      }
+    },
+    {
+      "Sid": "DenyPublicAMIandSnapshotSharing",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:ModifyImageAttribute",
+        "ec2:ModifySnapshotAttribute",
+        "rds:ModifyDBSnapshotAttribute",
+        "rds:ModifyDBClusterSnapshotAttribute"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": { "ec2:Add/group": "all" }
+      }
+    }
+  ]
+}

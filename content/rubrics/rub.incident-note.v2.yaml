@@ -91,10 +91,18 @@ human_review:
   # Doc §6.5 rule 37: "100% human review for certification-bearing final
   # project scores; ~10% random audit otherwise; 100% review for appeals
   # and for any submission where AI confidence is low or flags fired."
-  # Phase 2 scope has no calibration harness (rule 36) run against this
-  # rubric yet -- per rule 33's own fallback ("if you cannot afford the
-  # calibration work for a given rubric, make that criterion
-  # advisory-only... until you can"), every score from this rubric is
-  # provisional and 100% human-reviewed until a calibration pass exists,
-  # not just the doc's steady-state ~10% audit rate.
+  #
+  # The calibration harness (rule 36) now EXISTS for this rubric:
+  #   practice-core/scripts/rubric-calibrate.ts rub.incident-note.v2
+  #   evaluation/phase1/rubric-calibration/rub.incident-note.v2/  (6 seed cases)
+  # but has not yet had a PASSING run recorded (needs ANTHROPIC_API_KEY +
+  # the real stack, and the SME team's expansion to ~20 cases). Until
+  # rub-calibration.md records a passing run and a reviewer signs it,
+  # rule 33's fallback applies: every score from this rubric is
+  # provisional, 100%-human-reviewed, and WEIGHT-ZERO in the
+  # deterministic final score (evaluation.service.ts grades the artifact
+  # best-effort AFTER finalScore is set; the AI grade never moves it).
+  # On a passing calibration run, flip this to RANDOM_AUDIT_10_PCT and
+  # give the artifact criterion a real weight in sp.production-sim.default
+  # (procedure in rub-calibration.md).
   policy: ALWAYS_PROVISIONAL_UNTIL_CALIBRATED

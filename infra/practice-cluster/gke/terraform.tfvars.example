@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+
+project_id = "your-gcp-project-id"
+
+# Defaults are fine for a Phase 1 gVisor-proof test cluster:
+# region                            = "asia-south1"
+# k8s_release_channel               = "REGULAR"
+# platform_machine_type             = "e2-standard-4"
+# t1_machine_type                   = "e2-standard-4"
+# platform_nodes_per_zone           = 1   # x3 zones = 3 nodes
+# t1_nodes_per_zone                 = 1   # x3 zones = 3 nodes
+# t1_use_spot                       = true
+# enable_network_policy_enforcement = true

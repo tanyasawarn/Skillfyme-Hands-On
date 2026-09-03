@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.practiceengine.internal/events/milestone_gated.schema.json",
+  "title": "MilestoneGatedPayload",
+  "description": "Phase 3 (PLAN.md 169, memory.md §12.3). Produced by Practice Core's project-mode state machine after a milestone's validators + rubric slice have run. The gate decision for one milestone.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["milestone_key", "outcome"],
+  "properties": {
+    "milestone_key": { "type": "string", "enum": ["design", "infra", "implementation", "hardening", "final"] },
+    "outcome": { "type": "string", "enum": ["GATED_PASS", "GATED_FAIL"] },
+    "score": { "type": "number", "minimum": 0, "maximum": 1, "description": "milestone score contribution, present once scored" },
+    "rubric_level": { "type": "integer", "minimum": 1, "maximum": 5, "description": "rubric slice level, present when the milestone gate involves a rubric" },
+    "blocking": { "type": "boolean", "description": "whether a GATED_FAIL here blocks the next milestone" }
+  }
+}

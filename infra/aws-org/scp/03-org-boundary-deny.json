@@ -1,0 +1,50 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyLeaveOrgAndAccountMutation",
+      "Effect": "Deny",
+      "Action": [
+        "organizations:LeaveOrganization",
+        "organizations:DeleteOrganization",
+        "organizations:RemoveAccountFromOrganization",
+        "account:PutAlternateContact",
+        "account:PutContactInformation",
+        "account:CloseAccount",
+        "account:EnableRegion",
+        "account:DisableRegion"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyTamperWithSecurityServices",
+      "Effect": "Deny",
+      "Action": [
+        "cloudtrail:StopLogging",
+        "cloudtrail:DeleteTrail",
+        "cloudtrail:UpdateTrail",
+        "config:DeleteConfigurationRecorder",
+        "config:StopConfigurationRecorder",
+        "config:DeleteDeliveryChannel",
+        "guardduty:DeleteDetector",
+        "guardduty:DisassociateFromMasterAccount",
+        "guardduty:UpdateDetector"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyDeletePlatformNukeRole",
+      "Effect": "Deny",
+      "Action": [
+        "iam:DeleteRole", "iam:DeleteRolePolicy", "iam:DetachRolePolicy",
+        "iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:UpdateRole",
+        "iam:UpdateAssumeRolePolicy"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:role/PlatformNukeRole",
+        "arn:aws:iam::*:role/LearnerSandboxRole",
+        "arn:aws:iam::*:role/practice-engine-*"
+      ]
+    }
+  ]
+}

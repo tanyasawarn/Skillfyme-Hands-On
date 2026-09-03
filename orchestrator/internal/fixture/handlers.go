@@ -3,11 +3,13 @@ package fixture
 import (
 	"context"
 	"fmt"
+	"time"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/k8s"
 	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/ttl"
@@ -155,7 +157,23 @@ func applyK3sReady(ctx context.Context, provisioner *k8s.Provisioner, envID, nam
 // (doc §5.5's "ordered" requirement) means this can run before or after
 // fx.k3s-ready.v1 without depending on the learner's kubeconfig existing.
 func applyPodCrashloop(ctx context.Context, provisioner *k8s.Provisioner, envID, namespace string) error {
-	clientset := provisioner.Clientset()
+	// 35s: enough for CrashLoopBackOff to record ~2 restarts (backoff is
+	// 10s, 20s, 40s...), which is all the paired validator needs to
+	// distinguish "seeded and broken" (restartCount > 0) from "learner
+	// deleted + recreated with a working command" (restartCount == 0).
+	// Kept well inside the fixture-apply step's slice of the Provision
+	// RPC deadline (content-CI uses 60s for the whole Provision).
+	return applyPodCrashloopWithClientset(ctx, provisioner.Clientset(), namespace, 35*time.Second)
+}
+
+// applyPodCrashloopWithClientset is the clientset-only core of
+// applyPodCrashloop -- split out so it's unit-testable without a live
+// *k8s.Provisioner (which needs a real *rest.Config to construct).
+//
+// crashLoopWait bounds how long it waits for the pod to become OBSERVABLY
+// crash-looping (restartCount >= 6). Pass 0 to skip the wait (unit tests
+// against a fake clientset, where restartCount never advances).
+func applyPodCrashloopWithClientset(ctx context.Context, clientset kubernetes.Interface, namespace string, crashLoopWait time.Duration) error {
 	// SecurityContext fields here are REQUIRED, not optional hardening --
 	// caught by a real live Provision() call against this project's
 	// actual k3s cluster: without them, the K8s API server's own
@@ -199,12 +217,50 @@ func applyPodCrashloop(ctx context.Context, provisioner *k8s.Provisioner, envID,
 		},
 	}
 	_, err := clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
-	if apierrors.IsAlreadyExists(err) {
-		return nil
-	}
-	if err != nil {
+	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("creating broken-app pod: %w", err)
 	}
+
+	if crashLoopWait <= 0 {
+		return nil
+	}
+
+	// Wait until the pod is OBSERVABLY, STABLY broken before returning:
+	// restartCount >= 2 AND the container is currently in "waiting"
+	// (CrashLoopBackOff), not a transient Running blip between crashes.
+	//
+	// Both conditions matter for lab.k8s.troubleshooting's two null-path
+	// validators:
+	//   - v.pod-not-restarting asserts restartCount == 0 (fixed state), so
+	//     the seeded pod must have restartCount > 0.
+	//   - v.pod-running-stable asserts phase == Running (fixed state). A
+	//     CrashLoopBackOff pod cycles Running->Error->waiting; returning
+	//     while it happens to be in its brief Running phase makes that
+	//     validator PASS against the untouched broken env (a content-CI
+	//     null-path failure). Waiting for state.Waiting ensures we hand
+	//     back a pod that is currently NOT Running.
+	//
+	// Threshold 2 keeps this ~20-40s (CrashLoopBackOff backoff is
+	// 10s,20s,40s...), inside the fixture-apply step's slice of the
+	// Provision RPC deadline.
+	deadline := time.Now().Add(crashLoopWait)
+	for time.Now().Before(deadline) {
+		got, getErr := clientset.CoreV1().Pods(namespace).Get(ctx, "broken-app", metav1.GetOptions{})
+		if getErr == nil && len(got.Status.ContainerStatuses) > 0 {
+			cs := got.Status.ContainerStatuses[0]
+			if cs.RestartCount >= 2 && cs.State.Waiting != nil && got.Status.Phase != corev1.PodRunning {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	// Not fatal: the pod IS crash-looping, it just hasn't settled into a
+	// stable CrashLoopBackOff in the window (a slow node). The lab is
+	// still solvable; log-worthy, not error-worthy.
 	return nil
 }
 

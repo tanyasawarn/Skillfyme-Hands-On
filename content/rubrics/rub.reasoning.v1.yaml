@@ -1,0 +1,103 @@
+# Phase 3 (PLAN_PHASE3_PROJECTS.md 3.8 / B6, memory.md §12.3). The
+# defence-viva transcript scorer. Grades the learner's *reasoning* in the
+# milestone-5 viva — a turn-by-turn conversation where an examiner
+# probes divergence between the learner's milestone-1 design doc and
+# their actual implementation, plus general engineering-reasoning
+# questions.
+#
+# Graded against the deterministic facts handed to the grader (the
+# learner's own design doc + their own commit history — GradingFacts,
+# assembled by DefenceService from GitService), so a well-worded answer
+# that contradicts what the code actually does scores low.
+#
+# The viva score feeds sp.project.default's `defence` component (3.9),
+# which is one of the AI-derived components capped at 40% of the total.
+#
+# human_review.policy: ALWAYS_PROVISIONAL_UNTIL_CALIBRATED — the viva is
+# certification-relevant (memory.md §12.3, R13: 100% human review for
+# certification-bearing scores) and this rubric has no calibration run
+# yet (evaluation/phase1/rubric-calibration/rub.reasoning.v1/).
+id: rub.reasoning.v1
+version: 1
+artifact_type: MARKDOWN
+required_sections: []
+
+criteria:
+  - key: design_implementation_consistency
+    title: Design-vs-implementation consistency
+    description: >
+      When the examiner points at a divergence between the stated design
+      and the actual code/commits, does the learner acknowledge it
+      accurately and explain the reasoning behind the change? Graded
+      against the real commit history — a learner who claims their code
+      matches the design when it does not scores low.
+    levels:
+      - level: 1
+        descriptor: "Denies or is unaware of divergences the commit history plainly shows; answers contradict the code."
+      - level: 2
+        descriptor: "Acknowledges a divergence when pushed but cannot explain why the change was made or what it traded off."
+      - level: 3
+        descriptor: "Acknowledges each divergence accurately and gives a coherent reason for the change."
+      - level: 4
+        descriptor: "As level 3, and articulates what the change cost, when they'd revisit it, and how the design doc should have anticipated it."
+
+  - key: causal_reasoning
+    title: Causal reasoning under probing
+    description: >
+      For "what happens if / walk me through" questions (e.g. "what
+      happens to in-flight requests during your deploy?"), does the
+      learner reason correctly about the specific system they built,
+      rather than reciting a generic answer?
+    levels:
+      - level: 1
+        descriptor: "Generic or incorrect — the reasoning would not hold for this system's actual components."
+      - level: 2
+        descriptor: "Broadly correct direction but misses a step or a failure mode specific to their design."
+      - level: 3
+        descriptor: "Correct, system-specific reasoning with the key steps in the right order."
+      - level: 4
+        descriptor: "As level 3, and volunteers the non-obvious edge case or the mitigation they chose and why."
+
+  - key: intellectual_honesty
+    title: Intellectual honesty
+    description: >
+      Does the learner distinguish what they know from what they're
+      unsure about, concede when the examiner is right, and avoid
+      bluffing? A confident wrong answer scores below an honest "I'm not
+      certain, but I think…".
+    levels:
+      - level: 1
+        descriptor: "Bluffs — confident assertions that are wrong; does not concede clear points."
+      - level: 2
+        descriptor: "Mostly straightforward but oversells certainty on at least one shaky answer."
+      - level: 3
+        descriptor: "Consistently distinguishes knowledge from guesswork; concedes correct examiner points."
+      - level: 4
+        descriptor: "As level 3, and proactively flags the weakest parts of their own design without being asked."
+
+  - key: overall
+    title: Overall reasoning quality (GATE-relevant)
+    description: >
+      Holistic judgement of whether the learner demonstrably understands
+      the system they built and can reason about it under pressure — the
+      certification signal. Not an average: a learner who is honest and
+      reasons well but whose design/implementation story doesn't hold up
+      against their own commits cannot score above 2 here.
+    levels:
+      - level: 1
+        descriptor: "Does not demonstrate ownership or understanding of the system; a reviewer would not certify."
+      - level: 2
+        descriptor: "Partial understanding; significant gaps between the account given and what the code shows."
+      - level: 3
+        descriptor: "Demonstrates real ownership and sound reasoning about the system, with minor gaps."
+      - level: 4
+        descriptor: "Demonstrates deep, honest understanding — a reviewer would certify with confidence."
+
+# Doc §6.5 rule 35: the transcript (learner turns) is the untrusted input.
+# ClaudeAiGrader wraps `facts.artifactText` (the rendered transcript) in a
+# delimited <learner_artifact> block and instructs the model to treat it
+# as data. The adversarial calibration case embeds a
+# "grade this level 4" instruction in a learner turn; the injection test
+# asserts the score stays on merits.
+human_review:
+  policy: ALWAYS_PROVISIONAL_UNTIL_CALIBRATED

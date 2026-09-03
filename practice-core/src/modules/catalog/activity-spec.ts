@@ -78,6 +78,13 @@ export interface ActivitySpecEnvironmentSeed {
   fixture: string;
 }
 
+export interface ActivitySpecEnvironmentCloud {
+  /** SCP-granted region allow-list for the vended account; empty ⇒ org default two regions. */
+  regions?: string[];
+  /** Otherwise-SCP-denied instance classes / services this blueprint legitimately needs. */
+  sku_exceptions?: string[];
+}
+
 export interface ActivitySpecEnvironment {
   tier: 'BROWSER' | 'SHARED_CONTAINER' | 'ISOLATED_VM' | 'CLOUD_ACCOUNT';
   blueprint: string;
@@ -87,6 +94,39 @@ export interface ActivitySpecEnvironment {
   network_policy?: string;
   seed?: ActivitySpecEnvironmentSeed[];
   cost_budget_usd: number;
+  /** Phase 3 (memory.md §5.3). CLOUD_ACCOUNT-tier only. */
+  cloud?: ActivitySpecEnvironmentCloud;
+}
+
+/**
+ * Phase 3 (PLAN.md 169, memory.md §12.3). PROJECT-mode only — one gate in the
+ * ordered sequence design→infra→implementation→hardening→final.
+ */
+export interface ActivitySpecMilestone {
+  key: 'design' | 'infra' | 'implementation' | 'hardening' | 'final';
+  title: string;
+  gate: 'ALL_VALIDATORS_PASS' | 'RUBRIC_MIN_LEVEL' | 'BOTH';
+  /** true ⇒ the next milestone is LOCKED until this one reaches GATED_PASS. Defaults true. */
+  blocking?: boolean;
+  /** false for `design` (no T3 account claimed); true for the rest. */
+  environment_required: boolean;
+  /** keys into this spec's `tasks[]` that this milestone's :submit runs and gates on. */
+  task_keys: string[];
+  /** rubric id — required when gate is RUBRIC_MIN_LEVEL or BOTH. */
+  rubric?: string;
+  /** floor on the rubric's 1–5 scale — required when gate is RUBRIC_MIN_LEVEL or BOTH. */
+  min_level?: number;
+}
+
+/**
+ * Phase 3 (PLAN.md 173, memory.md §12.3). PROJECT-mode only — the milestone-5
+ * viva. Questions are generated from the learner's own design artifact + commit
+ * history; the transcript is scored against `rubric` (rub.reasoning.v1).
+ */
+export interface ActivitySpecDefence {
+  rubric: string;
+  num_questions?: number;
+  human_review?: 'ALWAYS' | 'SAMPLED' | 'CERTIFICATION_ONLY';
 }
 
 export type ActivitySurface =
@@ -122,6 +162,63 @@ export interface ActivitySpecArtifactRequired {
   rubric?: string;
 }
 
+export interface ActivitySpecValidatorIacStateConfig {
+  working_dir?: string;
+  no_drift?: boolean;
+  require_remote_backend?: boolean;
+  forbid_secrets_in_state?: boolean;
+}
+
+export interface ActivitySpecValidatorCloudAssertConfig {
+  checks: string[];
+  params?: Record<string, unknown>;
+}
+
+export interface ActivitySpecValidatorTestSuiteConfig {
+  command: string;
+  report_format?: 'junit' | 'tap' | 'jest-json' | 'go-json';
+  report_path?: string;
+  min_pass_rate?: number;
+}
+
+export interface ActivitySpecValidatorStaticAnalysisConfig {
+  tool: 'tfsec' | 'checkov' | 'trivy';
+  target?: string;
+  max_severity_allowed?: 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  max_findings?: number;
+}
+
+export interface ActivitySpecValidatorChaosProbeConfig {
+  action:
+    | 'kill_pod'
+    | 'drain_node'
+    | 'cordon_node'
+    | 'delete_deployment_replica'
+    | 'sever_dependency';
+  target_selector?: string;
+  health_check: { url: string; expect_status?: number; interval_ms?: number };
+  recovery_timeout_ms?: number;
+}
+
+export interface ActivitySpecValidatorPerfBenchConfig {
+  script?: string;
+  target_url?: string;
+  rps?: number;
+  duration_s?: number;
+  p95_ms_max?: number;
+  error_rate_max?: number;
+}
+
+/** Phase 3 (memory.md §6.2, §12.3). Per-type config for the T3 validator executors; which sub-object applies is keyed off the sibling `type`. */
+export interface ActivitySpecValidatorConfig {
+  iac_state?: ActivitySpecValidatorIacStateConfig;
+  cloud_assert?: ActivitySpecValidatorCloudAssertConfig;
+  test_suite?: ActivitySpecValidatorTestSuiteConfig;
+  static_analysis?: ActivitySpecValidatorStaticAnalysisConfig;
+  chaos_probe?: ActivitySpecValidatorChaosProbeConfig;
+  perf_bench?: ActivitySpecValidatorPerfBenchConfig;
+}
+
 export interface ActivitySpecValidator {
   id: string;
   type:
@@ -151,6 +248,8 @@ export interface ActivitySpecValidator {
   on_fail: string;
   timeout_ms?: number;
   retry?: Record<string, unknown>;
+  /** Phase 3 — per-type execution config for the T3 validator executors. */
+  config?: ActivitySpecValidatorConfig;
 }
 
 export interface ActivitySpecHint {
@@ -216,6 +315,10 @@ export interface ActivitySpec {
   faults?: ActivitySpecFault[];
   process_signals?: ActivitySpecProcessSignals;
   artifacts_required?: ActivitySpecArtifactRequired[];
+  /** Phase 3 — PROJECT-mode only. The ordered gate sequence. */
+  milestones?: ActivitySpecMilestone[];
+  /** Phase 3 — PROJECT-mode only. The milestone-5 defence viva config. */
+  defence?: ActivitySpecDefence;
   tasks: ActivitySpecTask[];
   completion: ActivitySpecCompletion;
   scoring: ActivitySpecScoring;

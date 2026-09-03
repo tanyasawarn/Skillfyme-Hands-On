@@ -77,6 +77,7 @@ tasks:
         severity: BLOCKING
         on_fail: "incident-facts.md should already be present at /workspace/incident-facts.md from the lab's fixture -- if it's missing, the environment didn't seed correctly."
     hints: []
+    solution_apply: scripts/t1_apply.sh
     telemetry_signals: [command_count]
 
 completion:

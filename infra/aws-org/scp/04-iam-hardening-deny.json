@@ -1,0 +1,27 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyIAMUsersAndLongLivedKeys",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreateUser",
+        "iam:CreateLoginProfile",
+        "iam:CreateAccessKey"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyIAMPolicyWildcardAdmin",
+      "Effect": "Deny",
+      "Action": ["iam:CreateAccountAlias", "iam:DeleteAccountAlias"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyDisablingIAMAccessAnalyzer",
+      "Effect": "Deny",
+      "Action": ["access-analyzer:DeleteAnalyzer"],
+      "Resource": "*"
+    }
+  ]
+}

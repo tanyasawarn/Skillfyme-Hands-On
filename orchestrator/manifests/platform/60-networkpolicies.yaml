@@ -1,0 +1,123 @@
+# Phase 2 D — NetworkPolicies for the platform namespace.
+#
+# Requirement D: "only allowed service can access orchestrator; all other
+# traffic blocked." Three policies, defense-in-depth:
+#
+#   1. default-deny-ingress   — nothing reaches any platform pod unless a
+#                               later policy explicitly allows it.
+#   2. orchestrator-grpc-ingress — ONLY practice-core pods may reach the
+#                               orchestrator's :50051 (and :8081 WS).
+#                               Metrics :9090 is separately allowed from
+#                               the monitoring namespace only.
+#   3. practice-core-http-ingress — the web frontend / ingress may reach
+#                               practice-core :3001.
+#
+# NetworkPolicy is namespaced and additive: with (1) in place, (2) and
+# (3) are the only ingress paths that exist.
+#
+# ENFORCEMENT NOTE: NetworkPolicy is only enforced if the CNI supports
+# it. k3s's default (flannel) does NOT enforce NetworkPolicy on its own —
+# k3s bundles kube-router's netpol controller which DOES, and it's on by
+# default in current k3s. Verify with:
+#   kubectl -n kube-system get pods | grep -E 'kube-router|calico|cilium'
+# If none, install one before relying on these (Cilium is the usual
+# choice; `k3s server --flannel-backend=none` + Cilium, or just trust
+# k3s's bundled kube-router). The verification harness
+# (scripts/d-security-check.sh) FAILS if enforcement isn't active, rather
+# than giving a false pass.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: practiceengine-platform
+spec:
+  podSelector: {} # every pod in the namespace
+  policyTypes: [Ingress]
+  # no ingress rules -> deny all ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: orchestrator-grpc-ingress
+  namespace: practiceengine-platform
+spec:
+  podSelector:
+    matchLabels: { app: orchestrator }
+  policyTypes: [Ingress]
+  ingress:
+    # ONLY practice-core, ONLY on gRPC + WS. Any other pod (a compromised
+    # sidecar, a debug pod, another platform service) is denied by the
+    # default-deny above and NOT re-allowed here.
+    - from:
+        - podSelector:
+            matchLabels: { app: practice-core }
+      ports:
+        - { protocol: TCP, port: 50051 } # gRPC
+        - { protocol: TCP, port: 8081 } # WS gateway (session broker upgrade)
+    # Prometheus scraping metrics — from the monitoring namespace only.
+    # Drop this block if you scrape from within the platform namespace.
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: monitoring }
+      ports:
+        - { protocol: TCP, port: 9090 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: practice-core-http-ingress
+  namespace: practiceengine-platform
+spec:
+  podSelector:
+    matchLabels: { app: practice-core }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # the ingress-controller namespace (adjust label to your setup)
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: ingress-nginx }
+        # ...or the web frontend if it runs in-cluster
+        - podSelector:
+            matchLabels: { app: web }
+      ports:
+        - { protocol: TCP, port: 3001 }
+---
+# Egress: the orchestrator must reach the K8s API server, DNS, Postgres,
+# Redis, NATS, and (optionally) S3. A default-deny-egress + explicit
+# allows is the stricter posture; provided here but SEPARATE from the
+# requirement-D ingress checks so a CNI that only half-supports egress
+# policy doesn't block the whole apply.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: orchestrator-egress
+  namespace: practiceengine-platform
+spec:
+  podSelector:
+    matchLabels: { app: orchestrator }
+  policyTypes: [Egress]
+  egress:
+    - to: # DNS
+        - namespaceSelector: {}
+          podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to: # K8s API server (host network) — CIDR is cluster-specific; 0.0.0.0/0 minus RFC1918 is a common approximation, but the safest is the apiserver's actual endpoint. Left broad here; tighten per cluster.
+        - ipBlock: { cidr: 0.0.0.0/0 }
+      ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }
+    - to: # datastores in this namespace
+        - podSelector: { matchLabels: { app: postgres } }
+      ports: [{ protocol: TCP, port: 5432 }]
+    - to:
+        - podSelector: { matchLabels: { app: redis } }
+      ports: [{ protocol: TCP, port: 6379 }]
+    - to:
+        - podSelector: { matchLabels: { app: nats } }
+      ports: [{ protocol: TCP, port: 4222 }]
+    - to: # learner env namespaces — the orchestrator creates pods/execs there
+        - namespaceSelector:
+            matchLabels: { practiceengine.dev/managed: "true" }

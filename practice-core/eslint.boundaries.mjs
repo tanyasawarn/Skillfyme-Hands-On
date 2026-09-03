@@ -31,6 +31,12 @@ const SEAM = [
   'artifact.service',
   'validator-runner.service',
   'validator-executor.interface',
+  // Phase 3 (1.6 / 1.9): the project module's milestone state machine
+  // reuses the AI-grader plumbing (PLAN_PHASE3_PROJECTS.md B5 — "reuses
+  // the Phase-2 AI-grader plumbing") and reads rubric content. Both are
+  // exported from EvaluationModule.
+  'ai-grader.interface',
+  'rubric.repository',
 ];
 
 // (^|/)                     -- start of specifier, or a path separator
@@ -80,6 +86,20 @@ export default tseslint.config(
                 'evaluation/README.md. To widen the seam, add the basename to ' +
                 'SEAM in eslint.boundaries.mjs AND to EvaluationModule exports ' +
                 'in the same PR.',
+            },
+            {
+              // PLAN.md G3 / doc §7.4: the Mentor path (mentor/ +
+              // llm-gateway/) must have NO import route to
+              // reference-solution content. solution-store lives inside
+              // evaluation/ and is not on the seam, so BOUNDARY_REGEX
+              // already blocks it -- this entry makes the intent
+              // explicit and its message specific.
+              regex: '(^|/)(\\.\\./)*(modules/)?evaluation/solution-store',
+              message:
+                'The Mentor / LLM-Gateway path must never import ' +
+                'evaluation/solution-store. Reference solutions are ' +
+                'grader-only, gated by GRADER_IDENTITY, provided only by ' +
+                'EvaluationModule (doc §7.4 IAM boundary).',
             },
           ],
         },

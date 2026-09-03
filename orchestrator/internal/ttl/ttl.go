@@ -15,8 +15,20 @@ const (
 	// EnvironmentDefault is doc §5.5's "Wall-clock since READY exceeds
 	// ttl_minutes" default -- how long a provisioned environment lives
 	// before forced teardown, absent a per-request override
-	// (ProvisionRequest.TtlMinutes).
+	// (ProvisionRequest.TtlMinutes). This is the T1 guided-lab default;
+	// T2 uses the shorter EnvironmentDefaultT2 below.
 	EnvironmentDefault = 90 * time.Minute
+
+	// EnvironmentDefaultT2 is the default TTL for a T2 (isolated microVM)
+	// environment when the caller leaves ttl_minutes unset. Deliberately
+	// shorter than EnvironmentDefault: a T2 production sim is scoped to
+	// ~60 min of work, and at T2's cost band ($0.10-0.35/env-hr, doc
+	// §5.1) a 90-min tail on a walked-away environment is 2x the intended
+	// per-attempt cost. 45 min covers the sim plus a buffer, with the
+	// long-running-op suppression in internal/idledetect preventing a
+	// premature kill during a legitimate slow step. See
+	// docs/t2-cost-optimization.md §3.1.
+	EnvironmentDefaultT2 = 45 * time.Minute
 
 	// IdleTimeoutDefault is doc §5.6's "no stdin, no file write, no
 	// validation... for idle_timeout (default 15 min)" -- absent a

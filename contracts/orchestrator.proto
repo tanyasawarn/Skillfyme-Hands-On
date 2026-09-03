@@ -19,12 +19,32 @@ service EnvironmentOrchestrator {
   // for an already-READY environment.
   rpc Connect(ConnectRequest) returns (ConnectResponse);
 
-  // Snapshot forces an out-of-cycle workspace snapshot (in addition to the
-  // periodic 5-min snapshot). Used before RESET_ALL, on suspend, on TTL/idle.
+  // Snapshot forces an out-of-cycle snapshot. Used before RESET_ALL, on
+  // suspend, on TTL/idle.
+  //
+  // For T1/T2 this is a workspace-volume snapshot (tar.zst to S3) — the
+  // pre-Phase-3 behaviour, still returned via the flat snapshot_id /
+  // storage_uri / bytes fields.
+  //
+  // For T3 (Phase 3, PLAN_PHASE3_PROJECTS.md A11) "snapshot" means capturing
+  // enough IaC + inventory state that the compute (workspace pod + claimed
+  // account's live resources) can be destroyed and faithfully rebuilt later:
+  // Terraform state ref (already in the platform-managed backend), a filtered
+  // `kubectl get -A`, and a cloud resource inventory. That richer manifest
+  // is returned in SnapshotResponse.manifest; the flat fields still carry the
+  // manifest object's own S3 location so existing callers keep working.
   rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
 
   // Restore provisions a fresh environment and restores the given snapshot
   // into it (RESET_KEEP_FILES, resume-from-suspend). §4.1, §5.5.
+  //
+  // T1/T2: unpack the workspace-volume snapshot into a fresh pod.
+  // T3 (Phase 3): re-provision the workspace pod, re-claim a sandbox account
+  // (the same one if still pooled, else a fresh one), and `terraform apply`
+  // from the persisted state referenced by the manifest so the learner's
+  // infra comes back byte-for-byte. RestoreRequest.snapshot_id identifies the
+  // manifest; cloud_account_hint lets the pool manager try to reuse the
+  // original account.
   rpc Restore(RestoreRequest) returns (ProvisionResponse);
 
   // Validate is NOT how validators run (that's Dev B's Validator Runner
@@ -157,10 +177,48 @@ message SnapshotRequest {
   string reason = 3;                 // "suspend" | "periodic" | "pre_reset" | "preemption"
 }
 
+// SnapshotManifest is the Phase 3 (T3) IaC-state capture — see the Snapshot
+// RPC comment. It is what makes "destroy the compute, keep the work" safe for
+// project mode (memory.md §12.3: "suspension is the norm, not the exception").
+// The manifest object itself is stored at SnapshotResponse.storage_uri; these
+// fields are its schema so a caller can reason about a restore without
+// re-fetching the blob.
+message SnapshotManifest {
+  // Terraform remote state the learner's infra lives in. The state itself is
+  // NOT copied here — it already persists in the platform-managed backend
+  // (S3 + DynamoDB lock in the Platform account, PLAN_PHASE3_PROJECTS.md A5),
+  // which is exactly why destroy/recreate is cheap. These fields just pin
+  // which state + version a Restore must `terraform apply` from.
+  string tf_backend_uri = 1;         // e.g. "s3://pe-tfstate-prod/attempts/{id}/terraform.tfstate"
+  string tf_state_serial = 2;        // the state file's "serial" at snapshot time, for drift detection on restore
+  string tf_workspace = 3;           // terraform workspace name, if not "default"
+
+  // Filtered `kubectl get -A` for the learner's own namespaces in the
+  // sandbox cluster (EKS), stored as a gzipped JSON blob at this URI. Used to
+  // diff post-restore and to show the learner what was running when they
+  // suspended.
+  string k8s_inventory_uri = 4;
+
+  // Cloud resource inventory (AWS Resource Explorer / Config query, tag-scoped
+  // to attempt_id), gzipped JSON at this URI. This is the reference the
+  // milestone-5 "resource inventory snapshotted (survives the nuke)" step
+  // (memory.md §12.3) reads, and what post-nuke verification diffs against.
+  string cloud_inventory_uri = 5;
+
+  int32 cloud_resource_count = 6;    // quick headline for dashboards / logs
+  string sandbox_account_id = 7;     // the account that held these resources (12-digit AWS id)
+  string captured_at = 8;            // RFC3339
+}
+
 message SnapshotResponse {
   string snapshot_id = 1;
-  string storage_uri = 2;            // attempts/{id}/snapshots/{ts}.tar.zst
+  string storage_uri = 2;            // T1/T2: attempts/{id}/snapshots/{ts}.tar.zst
+                                     // T3:    attempts/{id}/snapshots/{ts}.manifest.json
   int64 bytes = 3;
+  // Present only for T3 snapshots. Absent (default) for T1/T2 workspace-volume
+  // snapshots, which are fully described by the three flat fields above —
+  // additive, so existing callers ignore it harmlessly.
+  SnapshotManifest manifest = 4;
 }
 
 message RestoreRequest {
@@ -170,6 +228,11 @@ message RestoreRequest {
   string blueprint_version = 4;
   Tier tier = 5;
   ResourceSpec resources = 6;
+  // Phase 3 (T3): the sandbox account id from the snapshot manifest. The
+  // Account Pool Manager tries to re-claim this exact account if it is still
+  // AVAILABLE (avoids a fresh baseline apply); falls back to any AVAILABLE
+  // account otherwise. Ignored for T1/T2. Empty = no preference.
+  string cloud_account_hint = 7;
 }
 
 message MintCredentialsRequest {

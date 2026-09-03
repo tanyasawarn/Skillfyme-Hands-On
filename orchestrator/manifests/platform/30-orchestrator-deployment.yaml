@@ -1,0 +1,126 @@
+# Phase 2 D — the orchestrator as a real in-cluster Deployment.
+#
+# This is the topology change PHASE2_CLOSEOUT.md named as the blocker for
+# both the gRPC-ingress NetworkPolicy AND live mTLS verification: the
+# orchestrator has run as a bare host process this codebase's entire
+# existence. As a Pod:
+#   - it authenticates to the K8s API via the `orchestrator` ServiceAccount
+#     (10-orchestrator-rbac.yaml), not an external kubeconfig
+#     (KUBECONFIG is unset -> k8s.NewRestConfig("") -> rest.InClusterConfig)
+#   - the NetworkPolicy in 60-networkpolicies.yaml can finally attach to
+#     its pod-selector (app: orchestrator)
+#   - mTLS terminates at this pod, reachable only via the Service below
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+  namespace: practiceengine-platform
+  labels:
+    app: orchestrator
+spec:
+  replicas: 1 # the reaper/warm-pool/idle loops assume a single writer; scale-out needs leader election first
+  strategy:
+    type: Recreate # single-writer loops — don't run two during a rollout
+  selector:
+    matchLabels:
+      app: orchestrator
+  template:
+    metadata:
+      labels:
+        app: orchestrator
+    spec:
+      serviceAccountName: orchestrator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532 # distroless :nonroot
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: orchestrator
+          image: practiceengine/orchestrator:latest # set to your registry ref
+          imagePullPolicy: IfNotPresent
+          args: []
+          ports:
+            - { name: grpc, containerPort: 50051 }
+            - { name: ws, containerPort: 8081 }
+            - { name: metrics, containerPort: 9090 }
+          env:
+            # KUBECONFIG deliberately UNSET -> in-cluster config via the SA.
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: orchestrator-config, key: DATABASE_URL } }
+            - name: REDIS_URL
+              valueFrom: { secretKeyRef: { name: orchestrator-config, key: REDIS_URL } }
+            - name: NATS_URL
+              valueFrom: { secretKeyRef: { name: orchestrator-config, key: NATS_URL } }
+            - name: ORCHESTRATOR_GRPC_PORT
+              value: "50051"
+            - name: ORCHESTRATOR_WS_PORT
+              value: "8081"
+            - name: ORCHESTRATOR_METRICS_PORT
+              value: "9090"
+            - name: WS_GATEWAY_BASE_URL
+              value: "ws://orchestrator.practiceengine-platform.svc:8081"
+            - name: WS_GATEWAY_JWT_SECRET
+              valueFrom: { secretKeyRef: { name: orchestrator-config, key: WS_GATEWAY_JWT_SECRET } }
+            - name: ORCHESTRATOR_SHARED_SECRET
+              valueFrom: { secretKeyRef: { name: orchestrator-config, key: ORCHESTRATOR_SHARED_SECRET } }
+            # --- mTLS: ON. main.go treats a cert-load failure as fatal. ---
+            - name: ORCHESTRATOR_TLS_ENABLED
+              value: "true"
+            - name: ORCHESTRATOR_TLS_CERT
+              value: /etc/orchestrator/mtls/tls.crt
+            - name: ORCHESTRATOR_TLS_KEY
+              value: /etc/orchestrator/mtls/tls.key
+            - name: ORCHESTRATOR_TLS_CA
+              value: /etc/orchestrator/mtls/ca.crt
+            # --- T1 sandbox + T2 (Sysbox) ---
+            - name: ORCHESTRATOR_GVISOR_ENABLED
+              value: "false" # k3s + Sysbox; no gVisor on T1 in this topology
+            - name: ORCHESTRATOR_T2_ENABLED
+              value: "true"
+            - name: ORCHESTRATOR_T2_RUNTIME_CLASS
+              value: "sysbox-runc"
+            - name: DEFAULT_BUDGET_USD
+              value: "0.08"
+          volumeMounts:
+            - name: mtls
+              mountPath: /etc/orchestrator/mtls
+              readOnly: true
+          readinessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: mtls
+          secret:
+            secretName: orchestrator-mtls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator
+  namespace: practiceengine-platform
+  labels:
+    app: orchestrator
+spec:
+  # ClusterIP only — never a LoadBalancer/NodePort. The orchestrator gRPC
+  # endpoint is reachable ONLY from inside the cluster, and the
+  # NetworkPolicy narrows that further to practice-core's pods.
+  type: ClusterIP
+  selector:
+    app: orchestrator
+  ports:
+    - { name: grpc, port: 50051, targetPort: grpc }
+    - { name: ws, port: 8081, targetPort: ws }
+    - { name: metrics, port: 9090, targetPort: metrics }

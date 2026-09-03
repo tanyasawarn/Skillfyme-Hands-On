@@ -1,4 +1,4 @@
-import { Logger, OnModuleInit } from '@nestjs/common';
+import { Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'node:fs';
 import * as grpc from '@grpc/grpc-js';
@@ -31,10 +31,27 @@ import { GrpcClientConstants } from './constants';
  * ServiceError-specific field, so unifying to always-wrap changes no
  * observable behavior for either subclass.
  */
-export abstract class BaseGrpcClient implements OnModuleInit {
+export abstract class BaseGrpcClient implements OnModuleInit, OnModuleDestroy {
   protected abstract readonly logger: Logger;
   protected client!: any;
   private sharedSecret: string | undefined;
+
+  /**
+   * Close the gRPC channel on module teardown so a Nest app context that
+   * created this client (integration tests, scripts) can exit cleanly
+   * instead of leaving the HTTP/2 socket open. `@grpc/grpc-js` generated
+   * clients expose `close()`; guard in case a subclass swapped in a stub.
+   */
+  onModuleDestroy(): void {
+    const c = this.client as { close?: () => void } | undefined;
+    if (c && typeof c.close === 'function') {
+      try {
+        c.close();
+      } catch {
+        /* already closed */
+      }
+    }
+  }
 
   constructor(protected readonly config: ConfigService) {}
 

@@ -1,0 +1,113 @@
+# Phase 2 D — the orchestrator's in-cluster identity.
+#
+# This REPLACES the external kubeconfig the orchestrator has used its
+# entire existence (a client-cert kubeconfig from outside the cluster).
+# As an in-cluster pod, `k8s.NewRestConfig("")` falls through to
+# `rest.InClusterConfig()` (internal/k8s/client.go) and uses THIS
+# ServiceAccount's projected token + the cluster CA automatically.
+#
+# The permission set is derived by enumerating every clientset call in
+# internal/ (grep 'clientset\.' --include='*.go' | grep -v _test). The
+# orchestrator is a high-privilege actor by design: it creates and
+# deletes namespaces, execs into learner pods, mints scoped tokens, and
+# manages cluster-scoped RBAC for the learner-kubectl fixtures. This
+# ClusterRole is that surface, made explicit — not `cluster-admin`.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: orchestrator
+  namespace: practiceengine-platform
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: practiceengine-orchestrator
+rules:
+  # --- namespace lifecycle (Provision / Destroy / reaper orphan sweep) ---
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # --- the namespace-per-environment template (memory.md §5.2) ---
+  - apiGroups: [""]
+    resources:
+      ["resourcequotas", "limitranges", "serviceaccounts", "services", "configmaps", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"] # fixture handlers read specific secrets (e.g. generated tokens); NOT list
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"] # taint-blocks-scheduling fault, node capacity checks
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["list"] # leak check on Destroy
+
+  # --- Session Broker exec + validator exec (SPDY into pods) ---
+  - apiGroups: [""]
+    resources: ["pods/exec", "pods/log", "pods/attach"]
+    verbs: ["get", "create"]
+
+  # --- scoped validator credentials (MintValidatorCredentials, §6.2) ---
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    verbs: ["create"]
+
+  # --- fixtures that deploy real workloads into learner namespaces ---
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"] # traffic-spike load job, etc.
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"] # hpa faults
+
+  # --- NetworkPolicy: default-deny + egress-proxy allow per env namespace ---
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # --- learner-kubectl fixtures (fx.k3s-ready, argocd, etc.) need real RBAC objects ---
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterrolebindings"]
+    verbs: ["get", "create", "delete"] # learner-discovery-<ns> binding, cleaned on Destroy
+
+  # --- storage class for PVC-backed fixtures / faults ---
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch", "create"]
+
+  # --- read-only: RuntimeClass existence checks (T2 sysbox-runc / gvisor) ---
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["get", "list", "watch"]
+
+  # --- read-only: a fault handler checks for a mutating webhook config ---
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: practiceengine-orchestrator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: practiceengine-orchestrator
+subjects:
+  - kind: ServiceAccount
+    name: orchestrator
+    namespace: practiceengine-platform

@@ -1,0 +1,39 @@
+# Phase 3 2.2 — aws-nuke config template. __ACCOUNT_ID__ is substituted by
+# infra/nuke/run.sh at runtime. Scoped to the single sandbox account; the
+# blocklist protects the platform-managed roles the SCPs (1.2) also
+# guard, belt-and-braces.
+regions:
+  - us-east-1
+  - us-west-2
+  - global
+
+account-blocklist:
+  # never nuke a non-sandbox account
+  - "000000000000"   # replace with the real Platform/payer account id at deploy
+
+resource-types:
+  # let aws-nuke discover everything; excludes below are the guardrails
+  excludes:
+    - IAMRole                # handled by targets below (keep the platform roles)
+    - IAMRolePolicyAttachment
+    - OSPackage
+
+accounts:
+  "__ACCOUNT_ID__":
+    filters:
+      IAMRole:
+        - "PlatformNukeRole"
+        - "LearnerSandboxRole"
+        - "OrganizationAccountAccessRole"
+        - type: glob
+          value: "practice-engine-*"
+      IAMRolePolicyAttachment:
+        - type: glob
+          value: "PlatformNukeRole -> *"
+        - type: glob
+          value: "LearnerSandboxRole -> *"
+      IAMOpenIDConnectProvider:
+        # keep the OIDC provider the baseline created (re-creating it on
+        # every claim is slow); the learner's resources under it are nuked
+        - type: glob
+          value: "*"

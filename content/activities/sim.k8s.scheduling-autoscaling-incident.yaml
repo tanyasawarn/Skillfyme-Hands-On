@@ -1,0 +1,185 @@
+id: sim.k8s.scheduling-autoscaling-incident
+version: 1
+mode: PRODUCTION_SIM
+status: DRAFT
+
+meta:
+  title: "INC-6742: pods won't schedule and the HPA won't scale"
+  summary: >
+    A maintenance taint left a critical Deployment's pods Pending, and
+    separately an HPA silently stopped scaling because its metrics API
+    is unreachable -- two independent capacity failures during the same
+    on-call shift. Diagnose and fix both.
+  difficulty_level: L3
+  estimated_minutes: 35
+  locale: en
+  authors: [content-team]
+  tags: [k8s, scheduling, autoscaling, incident-response, troubleshooting]
+
+curriculum:
+  primary_topic: topic.devops.cloud-k8s-serverless
+  also_relevant: [topic.sre.capacity-and-load, topic.sre.incident-diagnosis]
+  courses: [course.sre]
+
+skills:
+  - skill: k8s.scheduling
+    weight: 0.35
+    primary: true
+    bloom: analyze
+  - skill: k8s.autoscaling
+    weight: 0.3
+    primary: false
+    bloom: analyze
+  - skill: k8s.troubleshooting
+    weight: 0.2
+    primary: false
+    bloom: analyze
+  - skill: sre.postmortem-authorship
+    weight: 0.15
+    primary: false
+    bloom: create
+
+prerequisites:
+  hard: [k8s.troubleshooting]
+  soft: [k8s.scheduling, k8s.autoscaling]
+
+objectives:
+  - Diagnose a Deployment left unschedulable by a node taint with no matching toleration
+  - Restore an HPA that silently stopped scaling because its metrics API is unavailable
+  - Write a root-cause/timeline/remediation/prevention incident note
+
+environment:
+  tier: SHARED_CONTAINER
+  blueprint: bp.k8s-single-node.v1
+  resources:
+    cpu: "2"
+    memory: 2Gi
+    disk: 5Gi
+  ttl_minutes: 45
+  idle_timeout_minutes: 15
+  network_policy: egress-allowlist-registry
+  seed:
+    - fixture: fx.k3s-ready.v1
+    - fixture: fx.checkout-deployment.v1
+  cost_budget_usd: 0.30
+
+surfaces: [terminal, editor, k8s_dashboard_readonly]
+
+# No HTTP health_gate: the taint fault deliberately leaves pods Pending
+# at T0, which a Service-level probe would fail before the learner starts.
+# The fixture's own pod-Ready check is the meaningful precondition (the
+# checkout workload IS healthy and scheduled before either fault lands).
+
+faults:
+  - id: f.k8s.taint-blocks-scheduling
+    params: { node: "current", taint_key: "maintenance", taint_effect: "NoSchedule" }
+    apply_at: T0
+  - id: f.k8s.hpa-metrics-unavailable
+    params: { hpa: "checkout" }
+    apply_at: T0
+
+process_signals:
+  diagnostic_efficiency:
+    good_actions:
+      - "kubectl get pods"
+      - "kubectl describe pod"
+      - "kubectl describe node"
+      - "kubectl get hpa"
+      - "kubectl describe hpa"
+      - "kubectl top pods"
+      - "kubectl get apiservices"
+    bad_actions:
+      - "kubectl delete pod --all"
+      - "kubectl delete deploy"
+      - "kubectl delete node"
+    scoring: ratio_and_ordering
+  blast_radius:
+    forbidden:
+      - "kubectl delete ns"
+      - "kubectl delete namespace"
+      - "kubectl delete node"
+
+tasks:
+  - key: t1
+    title: "INC-6742 (P2): checkout pods stuck Pending"
+    required: true
+    instructions_md: |
+      **INC-6742 — P2.** `kubectl get pods` shows the `checkout`
+      Deployment's pods stuck `Pending`. They were Running and healthy
+      an hour ago. A node was put into maintenance around that time.
+
+      **Access:** read-write `kubectl` access to this namespace and to
+      node objects.
+
+      Diagnose why the pods can't schedule and restore them.
+    validators:
+      - id: v.checkout-pods-scheduled
+        type: K8S_ASSERT
+        run: "kubectl get deploy checkout -o jsonpath='{.status.readyReplicas}'"
+        expect:
+          jsonpath: "$"
+          op: gte
+          value: 1
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "checkout still has no ready replicas. `kubectl describe pod` on a Pending pod shows the FailedScheduling event; `kubectl describe node` shows the taint. Fix is a matching toleration on the Deployment, or removing the taint if maintenance is done."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "Pods Pending with a FailedScheduling event mentioning 'node(s) had taint' means the scheduler has nowhere to put them -- compare the node's Taints against the Deployment's spec.template.spec.tolerations."
+    solution_apply: scripts/t1_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+  - key: t2
+    title: "the checkout HPA shows <unknown> and never scales"
+    required: true
+    instructions_md: |
+      `kubectl get hpa checkout` shows `<unknown>` in the TARGETS
+      column and the replica count is pinned at the minimum even under
+      load. The HPA spec itself looks correct.
+
+      Diagnose why the HPA can't read metrics and restore autoscaling.
+    validators:
+      - id: v.checkout-hpa-has-metrics
+        type: K8S_ASSERT
+        run: "kubectl get hpa checkout -o jsonpath='{.status.currentMetrics[0].resource.current.averageUtilization}'"
+        expect:
+          jsonpath: "$"
+          op: exists
+        weight: 1.0
+        severity: BLOCKING
+        on_fail: "The HPA still can't read metrics. `kubectl describe hpa checkout` shows 'unable to fetch metrics'; `kubectl get apiservices | grep metrics` shows whether the metrics API is registered and Available."
+    hints:
+      - level: 1
+        penalty: 0.03
+        text: "An HPA showing <unknown> targets with a correct spec means the metrics pipeline it depends on is down, not the HPA -- check `kubectl top pods` (fails the same way) and the metrics.k8s.io APIService's availability."
+    solution_apply: scripts/t2_apply.sh
+    telemetry_signals: [command_count, time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+artifacts_required:
+  - key: incident-note
+    type: MARKDOWN
+    rubric: rub.incident-note.v2
+
+scoring:
+  profile: sp.production-sim.default
+
+ai_mentor:
+  persona: senior_engineer
+  max_hints: 3
+  token_budget: 8000
+  solution_visibility: HIDDEN
+  policy: policy.sim.socratic.v1
+
+reference_solution:
+  repo_path: solutions/sim.k8s.scheduling-autoscaling-incident/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 7
+  max_attempts: null
+  retire_after: null

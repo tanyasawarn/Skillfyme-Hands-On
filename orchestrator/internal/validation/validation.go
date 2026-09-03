@@ -40,6 +40,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
+	"k8s.io/client-go/util/exec"
 
 	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/k8s"
 )
@@ -167,16 +168,23 @@ func execInPod(ctx context.Context, provisioner *k8s.Provisioner, envID, cmd str
 	restConfig := provisioner.RestConfig()
 	ns := k8s.NamespaceForEnv(envID)
 
-	// Wrap in a subshell that always echoes the exit code on its own
-	// line after stdout/stderr, since remotecommand's StreamWithContext
-	// doesn't otherwise surface the remote process's exit code directly
-	// to the caller in a way this package can read alongside stdout.
-	// Joined with a newline, not ";" -- cmd can be a multi-line script
-	// (ExecShell's solution_apply use case) that already ends in "\n",
-	// and "\n; echo ..." is a bash syntax error (an empty statement
-	// before ";"), confirmed live when the first multi-line ExecShell
-	// caller hit exactly this.
-	wrapped := fmt.Sprintf("%s\necho \"__EXIT_CODE__:$?\"", cmd)
+	// The payload runs as its OWN `bash` process, fed on stdin, and the
+	// exit-code marker is echoed by the *outer* shell after that inner
+	// bash returns. This is deliberately not `bash -c "<cmd>\necho ..."`:
+	// a solution_apply script that runs `set -e` and then hits a failing
+	// command -- or calls `exit N` explicitly (the "not Running in time"
+	// path several k8s labs take) -- terminates the shell it runs in
+	// before any *appended* line executes, so the marker never prints and
+	// the caller sees "exit code marker not found" instead of the real
+	// non-zero code. Isolating the payload in an inner `bash` scopes its
+	// `set -e` / `exit` to that process; the outer shell always survives
+	// to emit the marker. `cat <<'PE_EOF'` (quoted heredoc) passes the
+	// script through verbatim -- no interpolation, no quoting games for
+	// multi-line scripts with embedded quotes/`$`.
+	wrapped := fmt.Sprintf(
+		"cat <<'PE_EOF' | /bin/bash\n%s\nPE_EOF\necho \"__EXIT_CODE__:$?\"",
+		cmd,
+	)
 
 	req := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -216,6 +224,56 @@ func execInPod(ctx context.Context, provisioner *k8s.Provisioner, envID, cmd str
 	}
 
 	return execResult{Stdout: stripExitCodeMarker(out), Stderr: stderr.String(), ExitCode: code}, nil
+}
+
+// execInNamedPod runs argv inside an arbitrary pod/container in ns via
+// the exec API. Unlike execInPod it does NOT wrap the command in a shell
+// or append an exit marker -- callers that need the exit code get it
+// from the returned error (a non-zero exit surfaces as a
+// remotecommand exec CodeExitError). Used by K8S_ASSERT's `kubectl exec`
+// support, where the authored `run` is a single program invocation
+// (`printenv LOG_LEVEL`, `test -f /data/x`), not a script.
+func execInNamedPod(ctx context.Context, provisioner *k8s.Provisioner, ns, pod, container string, argv []string) (execResult, error) {
+	clientset := provisioner.Clientset()
+	restConfig := provisioner.RestConfig()
+
+	opts := &corev1.PodExecOptions{
+		Command: argv,
+		Stdin:   false,
+		Stdout:  true,
+		Stderr:  true,
+		TTY:     false,
+	}
+	if container != "" {
+		opts.Container = container
+	}
+
+	req := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Namespace(ns).
+		Name(pod).
+		SubResource("exec").
+		VersionedParams(opts, scheme.ParameterCodec)
+
+	executor, err := remotecommand.NewSPDYExecutor(restConfig, "POST", req.URL())
+	if err != nil {
+		return execResult{}, fmt.Errorf("building exec executor: %w", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	streamErr := executor.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+	res := execResult{Stdout: stdout.String(), Stderr: stderr.String()}
+	if streamErr != nil {
+		if exit, ok := streamErr.(exec.CodeExitError); ok {
+			res.ExitCode = exit.Code
+			return res, nil
+		}
+		return res, streamErr
+	}
+	return res, nil
 }
 
 func parseExitCodeMarker(out string) (int, bool) {

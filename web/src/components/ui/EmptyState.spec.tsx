@@ -11,7 +11,7 @@ describe('EmptyState', () => {
   it('renders arbitrary JSX children, not just a plain string (history.tsx embeds a Link)', () => {
     render(
       <EmptyState>
-        No attempts yet. Go to <a href="/catalog">catalog</a>.
+        No attempts yet. Go to <a href="https://example.test/catalog">catalog</a>.
       </EmptyState>,
     );
     expect(screen.getByRole('link', { name: 'catalog' })).toBeInTheDocument();

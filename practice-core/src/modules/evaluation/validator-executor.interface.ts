@@ -38,6 +38,17 @@ export interface ValidatorSpec {
   weight: number;
   severity?: 'BLOCKING' | 'WARN';
   timeoutMs?: number;
+  /**
+   * Phase 3 (PLAN_PHASE3_PROJECTS.md 1.8 / B3). Per-type execution config
+   * for the T3 validator types, mirroring
+   * `ActivitySpecValidatorConfig` (contracts/activity_spec.schema.json,
+   * added in 0.9). Carried through untyped from `spec_jsonb` today
+   * (EvaluationService casts tasks straight from the spec); the T3
+   * executors read the sub-object keyed off `type`. `unknown` rather
+   * than importing the catalog type keeps this interface free of a
+   * cross-module dependency, same stance as the rest of this file.
+   */
+  config?: Record<string, unknown>;
 }
 
 export type ValidatorResultStatus = 'PASS' | 'FAIL' | 'ERROR' | 'SKIP';

@@ -10,49 +10,11 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-// applyPodCrashloopWithClientset lets these tests exercise the handler's
-// pod-construction logic directly against a fake clientset, mirroring
-// applyK3sReady/applyNodeAppRepo's split between "takes *k8s.Provisioner"
-// (handlers.go's real signature, needed for RestConfig()/ExecShell) and
-// "the actual K8s object construction," but applyPodCrashloop only ever
-// needs a clientset -- extracted here as a thin wrapper so this file
-// doesn't need a live Provisioner (impossible to construct without a
-// real *rest.Config) just to test pod-spec correctness.
-func applyPodCrashloopWithClientset(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
-	runAsNonRoot := true
-	runAsUser := int64(1000)
-	allowPrivilegeEscalation := false
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "broken-app", Namespace: namespace},
-		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyAlways,
-			SecurityContext: &corev1.PodSecurityContext{
-				RunAsNonRoot: &runAsNonRoot,
-				RunAsUser:    &runAsUser,
-				SeccompProfile: &corev1.SeccompProfile{
-					Type: corev1.SeccompProfileTypeRuntimeDefault,
-				},
-			},
-			Containers: []corev1.Container{
-				{
-					Name:    "app",
-					Image:   "docker.io/library/busybox:latest",
-					Command: []string{"sh", "-c", "echo 'simulated crash: missing required config' >&2; exit 1"},
-					SecurityContext: &corev1.SecurityContext{
-						AllowPrivilegeEscalation: &allowPrivilegeEscalation,
-						Capabilities: &corev1.Capabilities{
-							Drop: []corev1.Capability{"ALL"},
-						},
-					},
-				},
-			},
-		},
-	}
-	_, err := clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
-	if err != nil {
-		return err
-	}
-	return nil
+// testApplyPodCrashloop calls the handler's clientset-only core with the
+// crash-loop wait disabled (a fake clientset never advances
+// restartCount, so a non-zero wait would just burn the whole deadline).
+func testApplyPodCrashloop(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
+	return applyPodCrashloopWithClientset(ctx, clientset, namespace, 0)
 }
 
 // TestApplyPodCrashloop_SatisfiesPodSecurityRestricted is a regression
@@ -68,7 +30,7 @@ func applyPodCrashloopWithClientset(ctx context.Context, clientset kubernetes.In
 // real cluster.
 func TestApplyPodCrashloop_SatisfiesPodSecurityRestricted(t *testing.T) {
 	clientset := fake.NewSimpleClientset()
-	if err := applyPodCrashloopWithClientset(context.Background(), clientset, testNamespace); err != nil {
+	if err := testApplyPodCrashloop(context.Background(), clientset, testNamespace); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -104,7 +66,7 @@ func TestApplyPodCrashloop_SatisfiesPodSecurityRestricted(t *testing.T) {
 
 func TestApplyPodCrashloop_CreatesAPodThatWillCrash(t *testing.T) {
 	clientset := fake.NewSimpleClientset()
-	if err := applyPodCrashloopWithClientset(context.Background(), clientset, testNamespace); err != nil {
+	if err := testApplyPodCrashloop(context.Background(), clientset, testNamespace); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	pod, err := clientset.CoreV1().Pods(testNamespace).Get(context.Background(), "broken-app", metav1.GetOptions{})

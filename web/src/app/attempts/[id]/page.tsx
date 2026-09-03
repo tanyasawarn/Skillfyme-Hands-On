@@ -8,7 +8,6 @@ import type {
   AttemptCheckResult,
   AttemptEvaluation,
   AttemptStatus,
-  HintReveal,
 } from '@/lib/api-client';
 import { api } from '@/lib/api-client';
 import { useSession } from '@/lib/session';
@@ -28,6 +27,10 @@ import { SectionLabel } from '@/components/ui/SectionLabel';
 import { formatPercent, formatMode } from '@/lib/format';
 import { useActivityVersion } from '@/lib/use-activity-version';
 import { useAttemptAction } from '@/lib/use-attempt-action';
+import { HintPanel } from '@/components/attempt/HintPanel';
+import { isProductionSim } from '@/lib/sim';
+import { SimShell } from '@/components/sim/SimShell';
+import { SimDebrief } from '@/components/sim/SimDebrief';
 
 /**
  * Doc §8.5 workspace layout is Dev A's territory (terminal/editor chrome
@@ -130,6 +133,11 @@ export default function AttemptPage({ params }: { params: Promise<{ id: string }
   // terminal-only layout that then jumps to two panes once it resolves.
   const needsEditor = activity ? (activity.spec_jsonb.surfaces ?? ['terminal', 'editor']).includes('editor') : true;
 
+  // PRODUCTION_SIM attempts get the incident-response rail (ticket, SLA
+  // timer, symptoms, escalation, incident-note editor) instead of the
+  // plain task list, and the debrief screen instead of ResultPanel.
+  const isSim = isProductionSim(attempt.mode);
+
   return (
     <div className={isWorkspaceActive ? 'flex h-[calc(100vh-56px)] flex-col overflow-hidden' : ''}>
       <AttemptHeader
@@ -155,8 +163,12 @@ export default function AttemptPage({ params }: { params: Promise<{ id: string }
       )}
 
       {isWorkspaceActive ? (
-        <div className="grid min-h-0 flex-1 grid-cols-[320px_1fr] gap-4 px-6 pb-6">
-          <TaskRail attemptId={id} tasks={taskSpecs} />
+        <div className="grid min-h-0 flex-1 grid-cols-[360px_1fr] gap-4 px-6 pb-6">
+          {isSim && activity ? (
+            <SimShell attemptId={id} attempt={attempt} spec={activity.spec_jsonb} />
+          ) : (
+            <TaskRail attemptId={id} tasks={taskSpecs} />
+          )}
           {needsEditor ? (
             <div className="grid min-h-0 grid-cols-2 gap-4">
               <div className="min-h-0">
@@ -193,7 +205,11 @@ export default function AttemptPage({ params }: { params: Promise<{ id: string }
           )}
 
           {isEvaluated && evaluation && (
-            <ResultPanel evaluation={evaluation} tasks={tasks} />
+            isSim && activity ? (
+              <SimDebrief evaluation={evaluation} tasks={tasks} spec={activity.spec_jsonb} />
+            ) : (
+              <ResultPanel evaluation={evaluation} tasks={tasks} />
+            )
           )}
 
           {/*
@@ -396,54 +412,6 @@ function TaskRail({
   );
 }
 
-/**
- * Doc §7.5 step 38: "mentor offers the next hint level explicitly,
- * stating the score cost... 'I can give you a stronger hint -- that'll
- * cost about 3% on this task's score. Want it?' Transparency converts an
- * adversarial interaction into an informed choice." Two-step UI mirrors
- * the two-step API (preview = no side effect, reveal = commits + costs).
- * Revealed hints accumulate in local state so escalating through the
- * ladder shows the full trail, not just the latest hint.
- */
-function HintPanel({ attemptId, taskKey }: { attemptId: string; taskKey: string }) {
-  const [revealed, setRevealed] = useState<HintReveal[]>([]);
-
-  const { data: preview, isLoading } = useQuery({
-    queryKey: ['hint-preview', attemptId, taskKey, revealed.length],
-    queryFn: () => api.previewHint(attemptId, taskKey),
-  });
-
-  const revealMutation = useMutation({
-    mutationFn: () => api.revealHint(attemptId, taskKey),
-    onSuccess: (hint) => setRevealed((prev) => [...prev, hint]),
-  });
-
-  return (
-    <div className="mt-2.5">
-      {revealed.map((hint) => (
-        <p key={hint.nextLevel} className="lms-inset-field mt-1.5 p-2.5 text-xs text-[var(--ink-muted)]">
-          <span className="font-semibold text-[var(--ink-soft)]">Hint L{hint.nextLevel}:</span> {hint.text}
-        </p>
-      ))}
-
-      {!isLoading && preview && (
-        <Button
-          onClick={() => revealMutation.mutate()}
-          disabled={revealMutation.isPending}
-          variant="outline"
-          size="sm"
-          className="mt-2 min-w-0 w-full"
-        >
-          {revealMutation.isPending ? 'Getting hint…' : `Get a hint (−${formatPercent(preview.penalty)})`}
-        </Button>
-      )}
-
-      {!isLoading && !preview && revealed.length > 0 && (
-        <p className="mt-2 text-xs text-[var(--ink-soft)]">No more hints for this task.</p>
-      )}
-    </div>
-  );
-}
 
 function ResultPanel({
   evaluation,

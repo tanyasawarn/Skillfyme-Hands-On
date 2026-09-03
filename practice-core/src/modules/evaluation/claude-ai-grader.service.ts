@@ -57,8 +57,16 @@ export class ClaudeAiGrader implements AiGrader {
   private readonly logger = new Logger(ClaudeAiGrader.name);
   private readonly client: Anthropic | null;
   private readonly model: string;
-  private static readonly SAMPLE_COUNT = 3;
-  // grade() makes SAMPLE_COUNT calls sequentially -- the SDK default
+  // SAMPLE_COUNT: how many independent gradings grade() runs per
+  // artifact, reconciled for a self-consistency signal. Default 3.
+  // Cost: each sample is a full API call, so this is the biggest cost
+  // lever (docs/ai-grader-cost.md). Drop to 1 via
+  // ANTHROPIC_GRADER_SAMPLE_COUNT=1 AFTER the rubric has passed
+  // calibration (rub-calibration.md records a passing run) and its
+  // grades are stable -- the disagreement flag is most valuable while a
+  // rubric is still being tuned. Clamped to [1, 5].
+  private readonly sampleCount: number;
+  // grade() makes sampleCount calls sequentially -- the SDK default
   // (10 minutes) is far too generous for a single grading call and
   // would let one hung request stall an entire evaluate() pipeline for
   // up to 30 minutes across all 3 samples. 45s is generous for a
@@ -94,6 +102,12 @@ export class ClaudeAiGrader implements AiGrader {
       : null;
     this.model =
       config.get<string>('ANTHROPIC_GRADER_MODEL') ?? 'claude-sonnet-4-5';
+    const rawSamples = Number(
+      config.get<string>('ANTHROPIC_GRADER_SAMPLE_COUNT') ?? '3',
+    );
+    this.sampleCount = Number.isFinite(rawSamples)
+      ? Math.min(5, Math.max(1, Math.round(rawSamples)))
+      : 3;
   }
 
   async grade(rubric: Rubric, facts: GradingFacts): Promise<GradingResult> {
@@ -103,7 +117,7 @@ export class ClaudeAiGrader implements AiGrader {
       );
     }
     const samples: CriterionGrade[][] = [];
-    for (let i = 0; i < ClaudeAiGrader.SAMPLE_COUNT; i++) {
+    for (let i = 0; i < this.sampleCount; i++) {
       samples.push(await this.gradeOnce(rubric, facts));
     }
 
@@ -114,7 +128,7 @@ export class ClaudeAiGrader implements AiGrader {
       criterionGrades: merged,
       provisional: true,
       provisionalReason: agreementFailed
-        ? `${ClaudeAiGrader.SAMPLE_COUNT}-sample grading disagreed on at least one criterion's level -- see per-criterion flags`
+        ? `${this.sampleCount}-sample grading disagreed on at least one criterion's level -- see per-criterion flags`
         : `no calibration harness has run against ${rubric.id} yet (doc §6.5 rule 33's fallback: every score is provisional until calibrated)`,
     };
   }
@@ -128,14 +142,34 @@ export class ClaudeAiGrader implements AiGrader {
     // before calling it (TypeScript doesn't narrow the field across the
     // method boundary, so this documents that invariant explicitly
     // rather than re-checking it).
+    // Prompt caching (cost): the system prompt AND the grading tool
+    // (its input_schema is derived only from the rubric) are byte-
+    // identical across all SAMPLE_COUNT calls for one artifact and
+    // across every artifact graded against the same rubric. Marking
+    // both with cache_control turns them into ~90%-discounted cache
+    // reads after the first call in a 5-minute window -- roughly a 30%
+    // cut on per-grade input cost at no quality change (the learner
+    // artifact + ground-truth facts, which DO vary per call, stay in
+    // the uncached user message). See docs/ai-grader-cost.md.
     const message = await this.client!.messages.create({
       model: this.model,
       max_tokens: 4096,
-      system: this.buildSystemPrompt(rubric),
+      system: [
+        {
+          type: 'text',
+          text: this.buildSystemPrompt(rubric),
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
       messages: [
         { role: 'user', content: this.buildUserPrompt(rubric, facts) },
       ],
-      tools: [this.buildGradingTool(rubric)],
+      tools: [
+        {
+          ...this.buildGradingTool(rubric),
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
       tool_choice: { type: 'tool', name: 'submit_grades' },
     });
 

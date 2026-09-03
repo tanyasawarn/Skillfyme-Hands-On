@@ -1,0 +1,73 @@
+# Deterministic ground truth for rub.incident-note.v2 calibration cases.
+#
+# For an incident note, "ground truth" is: which fault was actually
+# injected, and what the learner actually did. The `constraints_id` in
+# each case's front-matter selects one of these entries; the harness
+# feeds `summary` + `hard_limits` + `acceptable` to the grader via
+# appliedFaultIds (the same ground-truth channel production uses via
+# ProjectGradingFactsService / the fault_id the orchestrator injected).
+#
+# `summary`      = the fault, in the same terms content/faults/<id>.yaml uses
+# `hard_limits`  = statements a CORRECT root cause must NOT contradict
+# `acceptable`   = phrasings/mechanisms that count as a correct identification
+
+gt.oomkilled-memory-limit:
+  summary: >
+    content/faults/f.k8s.memory-limit-too-low.yaml — the checkout
+    Deployment's container memory limit was lowered to a value below its
+    real working-set size, causing the kernel OOM killer to terminate
+    the process repeatedly; Kubernetes surfaces this as recurring
+    OOMKilled container restarts.
+  hard_limits:
+    - "The pods were NOT deleted, evicted for node pressure, or failing a liveness probe for an unrelated reason."
+    - "There was NO image pull error, NO crash in application code, NO config/secret problem."
+    - "The Service, its selector, and its endpoints were correct throughout."
+  acceptable:
+    - "memory limit set too low / below working set / below actual usage"
+    - "OOMKilled / OOM killer / out of memory"
+    - "resources.limits.memory too small for the container"
+
+gt.wrong-service-selector:
+  summary: >
+    content/faults/f.k8s.wrong-service-selector.yaml — the checkout
+    Service's spec.selector was changed to a label value that matches
+    NO running pods, so the Service has zero endpoints even though the
+    backing pods are Running and Ready.
+  hard_limits:
+    - "The pods themselves are healthy — NOT crashing, NOT OOMKilled, NOT unschedulable."
+    - "There is NO NetworkPolicy, DNS, or egress-proxy problem involved in THIS fault."
+    - "The Deployment's own pod template labels were not changed — only the Service selector."
+  acceptable:
+    - "Service selector no longer matches the pods' labels"
+    - "zero endpoints / empty Endpoints object"
+    - "label selector mismatch between Service and pods"
+
+gt.readiness-probe-too-aggressive:
+  summary: >
+    content/faults/f.k8s.readiness-probe-too-aggressive.yaml — the
+    checkout container's readinessProbe timeoutSeconds/periodSeconds
+    were tightened so far that a healthy container intermittently fails
+    the probe under normal latency, flapping in and out of the Service's
+    endpoint list and causing intermittent 503s.
+  hard_limits:
+    - "The container is NOT actually unhealthy — it serves requests fine when probed with a normal timeout."
+    - "This is NOT an OOM, NOT a selector problem, NOT a resource-quota block."
+  acceptable:
+    - "readiness probe timeout / period too aggressive / too tight"
+    - "healthy pod failing its readiness probe intermittently"
+    - "endpoint flapping due to probe sensitivity"
+
+gt.egress-proxy-allowlist-too-strict:
+  summary: >
+    content/faults/f.cloud.egress-proxy-allowlist-too-strict.yaml — the
+    learner namespace's own allow-egress-proxy NetworkPolicy was
+    deleted, so every outbound connection from pods in the namespace
+    hangs with no response (not an HTTP error — no route to the egress
+    proxy at all).
+  hard_limits:
+    - "This is NOT a DNS failure and NOT an application bug — the connection never establishes."
+    - "The checkout Service/endpoints/pods are all fine for THIS fault."
+  acceptable:
+    - "namespace's allow-egress-proxy NetworkPolicy missing / deleted"
+    - "default-deny egress with no allow rule to the egress proxy"
+    - "no network path from the namespace to the platform egress proxy"

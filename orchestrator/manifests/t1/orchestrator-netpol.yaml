@@ -1,28 +1,14 @@
-# Doc §9.2 / PHASE2_CLOSEOUT.md's own flagged gap ("no K8s NetworkPolicy
-# restricting ingress to practice-core's pod-selector specifically" --
-# shared-secret auth at the application layer is a real boundary but not
-# defense-in-depth against a compromised/buggy backend process).
+# SUPERSEDED by orchestrator/manifests/platform/60-networkpolicies.yaml
+# (Phase 2 D). That directory now carries the REAL, deployable version of
+# this policy alongside the in-cluster orchestrator Deployment it attaches
+# to, a default-deny-ingress, the practice-core HTTP ingress, and the
+# orchestrator egress policy -- as a kustomize base with a live
+# verification harness (scripts/d-security-check.sh).
 #
-# NOT LIVE-VERIFIABLE in this dev environment: the orchestrator has run
-# as a bare host process this codebase's entire existence (confirmed:
-# no `orchestrator` service in docker-compose.yml; it authenticates to
-# the cluster via a real kubeconfig with client-cert auth from OUTSIDE
-# the cluster, not an in-cluster ServiceAccount) -- there is no
-# orchestrator Pod for this NetworkPolicy to attach to here. This
-# manifest is written for the intended PRODUCTION topology this gap
-# describes (both orchestrator and practice-core running as real K8s
-# pods, matching this session's own manifests/t1/ convention for
-# platform-namespace infrastructure), and is a real, correct,
-# apply-able manifest for that topology -- but its actual enforcement
-# has not been (and cannot yet be) exercised live here. Deploying the
-# orchestrator itself as a K8s pod is a separate, larger deployment-
-# topology decision this manifest does not make on its own.
-#
-# Labels below (app: orchestrator, app: practice-core) are the
-# EXPECTED labels a real Deployment for each would carry -- update this
-# manifest to match whatever labels the real Deployments actually use
-# once that topology exists, the same way egress-proxy.yaml's own
-# {app: egress-proxy} selector matches its own real Deployment.
+# This file is kept only as the historical single-policy sketch. The
+# labels (app: orchestrator, app: practice-core) match the real
+# Deployments in manifests/platform/, so applying this alone is still
+# correct on that topology -- it's just a subset of the full set.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

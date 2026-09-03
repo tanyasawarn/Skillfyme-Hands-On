@@ -60,22 +60,34 @@ tasks:
     validators:
       - id: v.pod-running-stable
         type: K8S_ASSERT
-        run: "kubectl get pod broken-app -o jsonpath='{.status.phase}'"
+        # containerStatuses[0].ready is true ONLY when the container is
+        # actually up and passing (or has no) readiness checks -- it is
+        # false for a CrashLoopBackOff container even though the Pod's
+        # .status.phase stays "Running" for an Always-restart pod. Asserting
+        # `ready == true` is what actually distinguishes a fixed pod from
+        # the seeded crash-looping baseline; `.status.phase` alone cannot.
+        run: "kubectl get pod broken-app -o jsonpath='{.status.containerStatuses[0].ready}'"
         expect:
           jsonpath: "$"
           op: "eq"
-          value: "Running"
+          value: true
         weight: 0.6
-        on_fail: "broken-app still isn't Running. `kubectl logs broken-app` shows the actual application error."
+        on_fail: "broken-app's container isn't Ready (it's still crash-looping). `kubectl logs broken-app` shows the actual application error."
       - id: v.pod-not-restarting
         type: K8S_ASSERT
         run: "kubectl get pod broken-app -o jsonpath='{.status.containerStatuses[0].restartCount}'"
         expect:
           jsonpath: "$"
-          op: "lt"
-          value: 5
+          op: "eq"
+          # The seeded broken pod is left crash-looping (restartCount > 0
+          # by the time provisioning finishes). A real fix replaces the
+          # pod (delete + re-create with a working command), which resets
+          # restartCount to 0. Asserting ==0 rather than "<5" is what
+          # makes this validator actually distinguish a fixed pod from
+          # the untouched broken baseline.
+          value: 0
         weight: 0.4
-        on_fail: "broken-app has restarted many times — the underlying issue likely isn't actually fixed yet, just temporarily Running."
+        on_fail: "broken-app still shows restarts — replace the crash-looping pod with a corrected spec (delete it and re-create), don't just wait for it to settle."
     hints:
       - level: 1
         penalty: 0.03

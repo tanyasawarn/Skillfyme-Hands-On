@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.practiceengine.internal/events/account_quarantined.schema.json",
+  "title": "AccountQuarantinedPayload",
+  "description": "Phase 3 (memory.md §5.3). Produced by the Orchestrator's Account Pool Manager. Post-nuke verification found leftover resources, or nuke itself errored. The account is held for human review and NEVER returned to the pool. This event pages on-call.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["cloud_account_id", "reason"],
+  "properties": {
+    "cloud_account_id": { "type": "string" },
+    "reason": { "type": "string", "enum": ["verification_nonempty", "nuke_error", "budget_breach_stuck", "sweeper", "manual"] },
+    "resources_remaining": { "type": "integer", "minimum": 0 },
+    "detail": { "type": "string", "description": "human-facing summary for the on-call runbook; never raw credentials" }
+  }
+}

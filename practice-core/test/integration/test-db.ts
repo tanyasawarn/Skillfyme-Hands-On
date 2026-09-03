@@ -68,6 +68,7 @@ export async function truncateAll(db: Kysely<Database>): Promise<void> {
       content.activity_skill, content.activity_topic, content.activity_version, content.activity,
       content.topic_skill, content.subtopic, content.topic, content.module, content.course,
       attempt.attempt_score, attempt.attempt_signal, attempt.validator_result, attempt.validation_run,
+      attempt.project_submission, attempt.project_milestone_state,
       attempt.attempt_task_state, attempt.attempt_events, attempt.artifact, attempt.attempt,
       learner.recommendation, learner.learner_elo, learner.learner_activity_state,
       learner.user_account, learner.tenant

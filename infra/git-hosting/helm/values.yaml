@@ -1,0 +1,70 @@
+# Phase 3 1.4 / B9 — production defaults for the platform Git host.
+# Mirrors infra/git-hosting/compose/forgejo-app.ini section-for-section.
+
+image:
+  repository: codeberg.org/forgejo/forgejo
+  tag: "9"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1 # Forgejo is not horizontally scalable without shared storage + external session store; single replica + a fast PVC is the Phase 3 target (memory.md §7.2: $80-200/mo).
+
+service:
+  httpPort: 3000
+  sshPort: 22
+
+ingress:
+  enabled: true
+  className: nginx
+  host: git.platform.internal # DNS record created by ../terraform
+  tls:
+    enabled: true
+    secretName: platform-git-tls
+
+persistence:
+  # Repo blobs — permanent retention (portfolio value). Never shrink,
+  # never a retention job. Sized for ~50 GB / 1k completed projects
+  # (memory.md §7.2); grow the PVC as cohorts complete.
+  storageClass: gp3
+  size: 100Gi
+  accessMode: ReadWriteOnce
+
+database:
+  # Points at the RDS instance from ../terraform. Host/name are values;
+  # the password comes from the `platform-git-secrets` Secret (key
+  # DB_PASSWD), never inlined here.
+  type: postgres
+  host: platform-git-db.internal:5432
+  name: forgejo
+  user: forgejo
+
+config:
+  # FORGEJO__<section>__<KEY> — the env-var form the entrypoint merges
+  # into app.ini on boot. Matches forgejo-app.ini.
+  server:
+    DOMAIN: git.platform.internal
+    ROOT_URL: https://git.platform.internal/
+    START_SSH_SERVER: "true" # production keeps SSH on for learner convenience
+    SSH_PORT: "22"
+    LFS_START_SERVER: "true"
+  security:
+    INSTALL_LOCK: "true"
+    MIN_PASSWORD_LENGTH: "12"
+  service:
+    DISABLE_REGISTRATION: "true"
+    REQUIRE_SIGNIN_VIEW: "true"
+    ENABLE_BASIC_AUTHENTICATION: "true"
+    DEFAULT_ALLOW_CREATE_ORGANIZATION: "false"
+  repository:
+    DEFAULT_PRIVATE: private
+    DEFAULT_BRANCH: main
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# Name of a pre-created Secret holding: DB_PASSWD, SECRET_KEY, INTERNAL_TOKEN.
+existingSecret: platform-git-secrets

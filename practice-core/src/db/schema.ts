@@ -24,6 +24,8 @@ export interface UserAccountTable {
   role: Generated<string>;
   status: Generated<string>;
   created_at: Generated<Timestamp>;
+  /** GDPR erasure marker (migration 0011). Non-null => the account was anonymised; email/PII no longer identify a person. */
+  erased_at: Timestamp | null;
 }
 
 export interface CourseTable {
@@ -198,6 +200,8 @@ export interface AttemptTable {
   /** Stub for real workspace-snapshot capture (revised lifecycle §5) -- always null until that's built. See AttemptService.cache()'s doc comment. */
   snapshot_id: string | null;
   snapshot_taken_at: Timestamp | null;
+  /** GDPR erasure marker (migration 0011). Non-null => this attempt's PII-bearing children (event payloads, artifact bodies) were redacted; the row itself is retained for aggregate counters. */
+  erased_at: Timestamp | null;
 }
 
 export interface AttemptTaskStateTable {
@@ -209,6 +213,46 @@ export interface AttemptTaskStateTable {
   hints_used_max_level: Generated<number>;
   skipped: Generated<boolean>;
   assisted: Generated<boolean>;
+}
+
+/** Phase 3 (0.10 / B1). PROJECT-mode only. Mirrors db/migrations/0010_project_mode.sql. */
+export type ProjectMilestoneKey =
+  'design' | 'infra' | 'implementation' | 'hardening' | 'final';
+
+export type ProjectMilestoneStatus =
+  'LOCKED' | 'OPEN' | 'SUBMITTED' | 'GATED_PASS' | 'GATED_FAIL';
+
+export interface ProjectMilestoneStateTable {
+  attempt_id: string;
+  milestone_key: ProjectMilestoneKey;
+  status: Generated<ProjectMilestoneStatus>;
+  ordinal: number;
+  submitted_at: Timestamp | null;
+  gated_at: Timestamp | null;
+  /**
+   * numeric(5,4). Written as a JS number (pg accepts it), same convention as
+   * `attempt.attempt_score.final_score`; on read the pg driver hands it back
+   * as a string, so callers coerce with `Number(...)`.
+   */
+  score: number | null;
+  rubric_level: number | null;
+  attempt_count: Generated<number>;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export type ProjectSubmissionOutcome = 'GATED_PASS' | 'GATED_FAIL';
+
+export interface ProjectSubmissionTable {
+  id: Generated<string>;
+  attempt_id: string;
+  milestone_key: ProjectMilestoneKey;
+  repo_ref: string;
+  commit_sha: Generated<string>;
+  attempt_number: Generated<number>;
+  outcome: ProjectSubmissionOutcome | null;
+  score: number | null;
+  submitted_at: Generated<Timestamp>;
 }
 
 export type EventActor = 'LEARNER' | 'SYSTEM' | 'VALIDATOR' | 'AI' | 'ADMIN';
@@ -369,4 +413,27 @@ export interface Database {
   'attempt.attempt_signal': AttemptSignalTable;
   'attempt.attempt_score': AttemptScoreTable;
   'attempt.artifact': ArtifactTable;
+  'attempt.project_milestone_state': ProjectMilestoneStateTable;
+  'attempt.project_submission': ProjectSubmissionTable;
+
+  'admin.experiment': ExperimentTable;
+  'admin.experiment_assignment': ExperimentAssignmentTable;
+}
+
+/** PLAN.md G11 / doc §11.4. Mirrors db/migrations/0012_experiments.sql. */
+export interface ExperimentTable {
+  key: string;
+  description: Generated<string>;
+  unit: Generated<'learner'>;
+  variants_jsonb: Jsonb<Array<{ name: string; weight: number }>>;
+  status: Generated<'DRAFT' | 'RUNNING' | 'CONCLUDED'>;
+  created_at: Generated<Timestamp>;
+  concluded_at: Timestamp | null;
+}
+
+export interface ExperimentAssignmentTable {
+  experiment_key: string;
+  user_id: string;
+  variant: string;
+  assigned_at: Generated<Timestamp>;
 }

@@ -37,7 +37,7 @@ func setupLiveProvisioner(t *testing.T) *k8s.Provisioner {
 	if _, err := clientset.Discovery().ServerVersion(); err != nil {
 		t.Skipf("skipping: k8s cluster unreachable (dev stack not running?): %v", err)
 	}
-	return k8s.NewProvisioner(clientset, restConfig, false)
+	return k8s.NewProvisioner(clientset, restConfig, k8s.ProvisionerConfig{})
 }
 
 // applyRealT1NetworkBaseline replicates the exact NetworkPolicy shape a

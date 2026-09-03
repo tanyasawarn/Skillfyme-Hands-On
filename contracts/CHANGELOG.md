@@ -20,6 +20,93 @@ the same commit as any `orchestrator.proto` change — CI enforces this with
 
 ---
 
+## 2026-08-27 — Phase 3 (0.7): Snapshot/Restore payload shape for T3 IaC-state
+
+**MINOR** — `orchestrator.proto`. Purely additive: one new message, two new fields, doc
+comments. `buf breaking` (vs `origin/main`) passes. `buf lint` passes. Go stubs regenerated
+(`cd contracts && buf generate`) in the same change — `orchestrator/pkg/pb/orchestrator.pb.go`
++ `orchestrator_grpc.pb.go`. `cd orchestrator && go build ./... && go vet ./... && go test ./...`
+all clean; `gofmt` clean.
+
+- `SnapshotManifest` (new message) — the T3 IaC-state capture: `tf_backend_uri` +
+  `tf_state_serial` + `tf_workspace` (pins which Terraform state a Restore applies from — the
+  state itself stays in the platform-managed backend, not copied), `k8s_inventory_uri`
+  (filtered `kubectl get -A` blob), `cloud_inventory_uri` + `cloud_resource_count` (Resource
+  Explorer / Config inventory, tag-scoped to `attempt_id` — the reference the milestone-5
+  "inventory survives the nuke" step and post-nuke verification both read), `sandbox_account_id`,
+  `captured_at`.
+- `SnapshotResponse.manifest` (field 4, `SnapshotManifest`) — populated only for T3; absent
+  for T1/T2 workspace-volume snapshots, which stay fully described by the existing flat
+  `snapshot_id` / `storage_uri` / `bytes` fields.
+- `RestoreRequest.cloud_account_hint` (field 7, string) — the sandbox account id from the
+  manifest, so the Account Pool Manager can try to re-claim the same account on resume.
+  Ignored for T1/T2.
+
+No behavioural change yet: `Snapshot` / `Restore` still return `Unimplemented` in
+`internal/orchestrator/server.go` (that's Stage 3.3). This change only widens the contract so
+3.3 and Dev B's Stage 1.6 milestone state machine can build against the agreed shape.
+practice-core consumes the proto via `@grpc/proto-loader` at runtime (no generated artifact) —
+it does not call these RPCs yet; the updated proto still parses (grpc-client tests 12/12,
+full unit suite 170/170).
+
+---
+
+## 2026-08-27 — Phase 3 (0.8): Project + Cloud-account event taxonomy
+
+**MINOR** — `events.md` + five new `events/*.schema.json`. Additive: new event types, new
+payload schemas. No existing type or payload changed. Adding a new event type is a
+joint-approval contract change (events.md cross-track rule 4) — same rule as the proto.
+
+New taxonomy entries (events.md):
+
+- **Project** — `MILESTONE_GATED` (`milestone_gated.schema.json`), `DEFENCE_MESSAGE`
+  (`defence_message.schema.json`). Practice Core producers. `MILESTONE_SUBMITTED` was already
+  in the table (reserved since K8); its Notes column is now filled in.
+- **Cloud account** — `ACCOUNT_CLAIMED` (`account_claimed.schema.json`), `ACCOUNT_NUKED`
+  (`account_nuked.schema.json`), `ACCOUNT_QUARANTINED` (`account_quarantined.schema.json`).
+  Orchestrator (Account Pool Manager) producers, Phase 3 Stage 2.4. These still carry the
+  envelope's required `attempt_id` — one vended account maps 1:1 to one attempt for its
+  `IN_USE` lifetime; sweeper-time quarantine uses the last holding attempt + `reason:"sweeper"`.
+
+TS taxonomy `practice-core/src/modules/event-store/attempt-event-type.ts` (`ATTEMPT_EVENT_TYPES`)
+updated in lockstep — the six types added under new `// Project` / `// Cloud account` group
+comments. `ReplayService`'s switch already no-ops unbranched types via its `default:` case, so
+no change there. `npx tsc --noEmit` clean; new `attempt-event-type.spec.ts` (3 tests) asserts
+the entries exist, are unique, and each documented payload schema file is present and
+well-formed. Full practice-core unit suite 170/170. `orchestrator/` `go build ./...` clean
+(no Go-side event-type enum; Go producers build payloads ad-hoc).
+
+No proto change.
+
+---
+
+## 2026-08-27 — Phase 3 (0.9): PROJECT mode + milestones + T3 validator config
+
+**MINOR** — `activity_spec.schema.json`. All additions are new, optional properties; no
+existing field changed, no `required` array altered. Existing GUIDED_LAB / PRODUCTION_SIM
+content validates unchanged (confirmed: `activity-spec.spec.ts` + `spec-lint.service.spec.ts`,
+10 tests; full practice-core unit suite 167/167).
+
+- `environment.cloud` — `{ regions?, sku_exceptions? }`. CLOUD_ACCOUNT-tier only. Feeds the
+  SCP region allow-list and the expensive-SKU exception tag (PLAN_PHASE3_PROJECTS.md A2).
+- `milestones[]` — the PROJECT-mode ordered gate sequence
+  (`design`|`infra`|`implementation`|`hardening`|`final`), each with `gate`
+  (`ALL_VALIDATORS_PASS`|`RUBRIC_MIN_LEVEL`|`BOTH`), `blocking`, `environment_required`,
+  `task_keys[]`, and optional `rubric` + `min_level`. PLAN.md 169, memory.md §12.3.
+- `defence` — `{ rubric, num_questions?, human_review? }`. The milestone-5 viva config.
+- `tasks[].validators[].config` — per-type execution config for the six T3 validator types
+  (`iac_state`, `cloud_assert`, `test_suite`, `static_analysis`, `chaos_probe`, `perf_bench`).
+  Which sub-object applies is keyed off the sibling `type`. All optional; an executor returns
+  ERROR (never a learner-scored FAIL) if the config it needs is absent. memory.md §6.2, §12.3.
+
+TS mirror `practice-core/src/modules/catalog/activity-spec.ts` updated in the same change
+(`ActivitySpecMilestone`, `ActivitySpecDefence`, `ActivitySpecEnvironmentCloud`,
+`ActivitySpecValidatorConfig` + the six per-type interfaces). `npx tsc --noEmit` clean.
+
+No proto change, so no `buf generate` / stub regeneration involved.
+
+---
+
 ## Reconcile — 2026-08-27 (baseline audit of the three consumers)
 
 First changelog entry doubles as a one-time reconciliation of `orchestrator.proto` against its

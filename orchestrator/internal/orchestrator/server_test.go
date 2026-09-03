@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"testing"
+	"time"
 
 	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/k8s"
+	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/ttl"
 	pb "github.com/tanyasawarn/skillfyme-hands-on/orchestrator/pkg/pb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -72,6 +74,46 @@ func TestResolveTier_T2RequestAllowedWhenEnabled(t *testing.T) {
 	}
 	if tier != k8s.TierT2IsolatedMicroVM {
 		t.Errorf("expected TierT2IsolatedMicroVM, got %v", tier)
+	}
+}
+
+// resolveEnvTTL: the cost-relevant TTL-selection decision. T2's default
+// must be shorter than T1's so a walked-away microVM can't burn ~2x its
+// intended per-attempt cost (docs/t2-cost-optimization.md §3.1), and a
+// caller-supplied ttl_minutes must still override either default.
+
+func TestResolveEnvTTL_T2DefaultsShorterThanT1(t *testing.T) {
+	t1Default := ttl.EnvironmentDefault // 90m, the Server's configured default
+
+	t1 := resolveEnvTTL(k8s.TierT1SharedContainer, 0, t1Default)
+	if t1 != t1Default {
+		t.Errorf("T1 with no override: expected %v, got %v", t1Default, t1)
+	}
+
+	t2 := resolveEnvTTL(k8s.TierT2IsolatedMicroVM, 0, t1Default)
+	if t2 != ttl.EnvironmentDefaultT2 {
+		t.Errorf("T2 with no override: expected %v, got %v", ttl.EnvironmentDefaultT2, t2)
+	}
+	if t2 >= t1 {
+		t.Errorf("cost regression: T2 default TTL (%v) must be strictly shorter than T1's (%v)", t2, t1)
+	}
+}
+
+func TestResolveEnvTTL_CallerOverrideWinsForEitherTier(t *testing.T) {
+	const override int32 = 20
+	want := 20 * time.Minute
+	for _, tier := range []k8s.Tier{k8s.TierT1SharedContainer, k8s.TierT2IsolatedMicroVM} {
+		if got := resolveEnvTTL(tier, override, ttl.EnvironmentDefault); got != want {
+			t.Errorf("tier=%v: caller ttl_minutes=%d should win, expected %v, got %v", tier, override, want, got)
+		}
+	}
+}
+
+func TestResolveEnvTTL_ZeroOrNegativeOverrideIgnored(t *testing.T) {
+	for _, bad := range []int32{0, -1} {
+		if got := resolveEnvTTL(k8s.TierT2IsolatedMicroVM, bad, ttl.EnvironmentDefault); got != ttl.EnvironmentDefaultT2 {
+			t.Errorf("ttl_minutes=%d must be ignored, expected T2 default %v, got %v", bad, ttl.EnvironmentDefaultT2, got)
+		}
 	}
 }
 

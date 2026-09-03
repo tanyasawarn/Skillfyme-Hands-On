@@ -95,7 +95,11 @@ func main() {
 	if !cfg.GVisorEnabled {
 		log.Println("[main] WARNING: ORCHESTRATOR_GVISOR_ENABLED is not set -- T1 workspace pods will NOT run under the gVisor RuntimeClass (manifests/t1/runtimeclass-gvisor.yaml). Set it to true only after confirming gVisor is actually installed on this cluster's T1 node pool.")
 	}
-	provisioner := k8s.NewProvisioner(clientset, restConfig, cfg.GVisorEnabled)
+	log.Printf("[main] T2 workloads will use RuntimeClass %q (ORCHESTRATOR_T2_RUNTIME_CLASS). Default \"sysbox-runc\" = Sysbox on the shared T1 pool; \"kata\" = dedicated microVM pool; \"\" = node default (local dev only).", cfg.T2RuntimeClass)
+	provisioner := k8s.NewProvisioner(clientset, restConfig, k8s.ProvisionerConfig{
+		GVisorEnabled:  cfg.GVisorEnabled,
+		T2RuntimeClass: cfg.T2RuntimeClass,
+	})
 
 	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -236,6 +240,18 @@ func main() {
 	// PLAN.md Phase 1 exit-criteria measurement: time-to-ready p95,
 	// provision success rate, cost/attempt, and the zero-orphan gate
 	// are all read from here. Empty port disables the endpoint.
+	// Phase 3 Stage 2: T3 cloud-account lifecycle (account pool, STS
+	// broker, budget enforcement, nuke sweeper, cost pollers). No-op
+	// unless CLOUD_ACCOUNTS_ENABLED=true — see internal/config for the
+	// full env-var set. `terminateT3` is a stub until the T3 driver's
+	// Destroy-by-attempt path lands (Stage 3.2); it logs the intent so a
+	// budget breach is still visible.
+	cloudLife := setupCloudLifecycle(ctx, cfg, db, rdb, nc, func(_ context.Context, attemptID string) error {
+		log.Printf("[cloud] budget breach: would force-terminate T3 for attempt %s (T3 driver lands in Stage 3.2)", attemptID)
+		return nil
+	})
+	_ = cloudLife // Provision-path wiring (LaunchCap, Pool.Claim) is Stage 3.2
+
 	if cfg.MetricsPort != "" {
 		metricsMux := http.NewServeMux()
 		metricsMux.Handle("/metrics", metrics.Handler())
@@ -243,6 +259,7 @@ func main() {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ok"))
 		})
+		cloudLife.RegisterHTTP(metricsMux) // /cloud/budget-breach (no-op when disabled)
 		metricsServer := &http.Server{Addr: ":" + cfg.MetricsPort, Handler: metricsMux}
 		go func() {
 			log.Printf("[main] metrics + healthz listening on :%s", cfg.MetricsPort)

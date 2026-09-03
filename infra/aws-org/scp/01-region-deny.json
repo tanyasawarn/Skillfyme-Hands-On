@@ -1,0 +1,20 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyAllOutsideAllowedRegions",
+      "Effect": "Deny",
+      "NotAction": [
+        "iam:*", "sts:*", "organizations:*", "route53:*", "cloudfront:*",
+        "waf:*", "wafv2:*", "shield:*", "support:*", "trustedadvisor:*",
+        "budgets:*", "ce:*", "cur:*", "globalaccelerator:*", "health:*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestedRegion": ["${allowed_region_1}", "${allowed_region_2}"]
+        }
+      }
+    }
+  ]
+}

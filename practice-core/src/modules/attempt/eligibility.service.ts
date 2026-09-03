@@ -105,20 +105,24 @@ export class EligibilityService {
       .where('user_id', '=', userId)
       .where('activity_id', '=', activityId)
       .executeTakeFirst();
-    // TESTING: retry cooldown check temporarily disabled so attempts can be
-    // started back-to-back while testing the system. Restore this block before
-    // shipping.
-    // if (
-    //   learnerState?.cooldown_until &&
-    //   learnerState.cooldown_until > new Date()
-    // ) {
-    //   reasons.push({
-    //     code: 'COOLDOWN_ACTIVE',
-    //     message: `retry cooldown active until ${learnerState.cooldown_until}`,
-    //     context: { cooldownUntil: learnerState.cooldown_until },
-    //   });
-    // }
-    void learnerState;
+    // doc §2.7: after a failure the same activity is not immediately
+    // re-offered -- evaluation.service.ts writes cooldown_until on a
+    // failed attempt; this is the read side that actually blocks the
+    // re-attempt until that timestamp passes. cooldown_until selects as
+    // a Date via the schema ColumnType, but the pg driver can hand back
+    // an ISO string depending on parser config, so normalise through
+    // Date(...).getTime() rather than relying on `>` between a Date and
+    // a possibly-string value.
+    if (learnerState?.cooldown_until != null) {
+      const cooldownEndsMs = new Date(learnerState.cooldown_until).getTime();
+      if (cooldownEndsMs > Date.now()) {
+        reasons.push({
+          code: 'COOLDOWN_ACTIVE',
+          message: `retry cooldown active until ${new Date(cooldownEndsMs).toISOString()}`,
+          context: { cooldownUntil: learnerState.cooldown_until },
+        });
+      }
+    }
 
     // Concurrent-environment quota (doc §4.4: "one active environment per
     // learner by default"). An attempt still holds its environment slot

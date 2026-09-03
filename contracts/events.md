@@ -66,7 +66,20 @@ producers (Session Broker, Orchestrator) can race and only the writer can guaran
 | Environment | `SNAPSHOT_TAKEN` | Orchestrator | |
 | Scenario | `TICKET_OPENED` | Practice Core | Phase 2 |
 | Scenario | `ESCALATION_FIRED` | Practice Core | Phase 2 |
-| Scenario | `MILESTONE_SUBMITTED` | Practice Core | Phase 3 |
+| Project | `MILESTONE_SUBMITTED` | Practice Core | Phase 3 — `{milestone_key}`. Fired when a learner submits a project milestone for gating. |
+| Project | `MILESTONE_GATED` | Practice Core | Phase 3 — `{milestone_key, outcome, score?, rubric_level?}`. The gate decision (`GATED_PASS` / `GATED_FAIL`) after validators + rubric run. See `contracts/events/milestone_gated.schema.json`. |
+| Project | `DEFENCE_MESSAGE` | Practice Core | Phase 3 — `{role, turn, question_ref?}`. One turn of the milestone-5 viva transcript (`role` = `EXAMINER` \| `LEARNER`). Scored later against `rub.reasoning.v1`. See `contracts/events/defence_message.schema.json`. |
+| Cloud account | `ACCOUNT_CLAIMED` | Orchestrator (Account Pool Manager) | Phase 3 — `{cloud_account_id, region}`. A vended sandbox account moved `AVAILABLE → IN_USE` for this attempt. See `contracts/events/account_claimed.schema.json`. |
+| Cloud account | `ACCOUNT_NUKED` | Orchestrator (Account Pool Manager) | Phase 3 — `{cloud_account_id, verified, resources_remaining}`. `aws-nuke` ran and the mandatory verification pass completed. `verified: true` ⇒ the account returned to `AVAILABLE`. See `contracts/events/account_nuked.schema.json`. |
+| Cloud account | `ACCOUNT_QUARANTINED` | Orchestrator (Account Pool Manager) | Phase 3 — `{cloud_account_id, reason, resources_remaining?}`. Post-nuke verification found leftover resources (or nuke itself failed); the account is held for human review, never returned to the pool. Pages on-call. See `contracts/events/account_quarantined.schema.json`. |
+
+### A note on the `attempt_id` requirement for cloud-account events
+
+`ACCOUNT_CLAIMED` / `ACCOUNT_NUKED` / `ACCOUNT_QUARANTINED` still carry `attempt_id` as the
+envelope's required correlation key — one vended account maps to exactly one attempt for its
+whole `IN_USE` lifetime (memory.md §10.3: "one account = one attempt makes attribution
+exact"). `ACCOUNT_QUARANTINED` that happens during the *nightly sweeper* (no active attempt)
+uses the last attempt that held the account as `attempt_id`, plus `reason: "sweeper"`.
 
 ## Cross-track rules (do not violate)
 

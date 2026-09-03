@@ -1,0 +1,21 @@
+# Phase 2 D — the platform namespace.
+#
+# memory.md §5.2: "Shared infra (platform namespace, NOT learner-reachable)".
+# Everything the platform runs (orchestrator, practice-core, session
+# broker, reaper, egress proxy, datastores) lives here; learner
+# environments get their own `env-<id>` namespaces created by the
+# orchestrator at Provision time.
+#
+# PSS `restricted` on this namespace: the platform's own pods have no
+# reason to be privileged. (Learner `env-*` namespaces are `restricted`
+# for T1 and `privileged` for T2 — set per-namespace by the orchestrator,
+# not here.)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: practiceengine-platform
+  labels:
+    practiceengine.dev/platform: "true"
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

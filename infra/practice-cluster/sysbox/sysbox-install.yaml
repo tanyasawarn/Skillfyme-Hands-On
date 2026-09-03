@@ -1,0 +1,143 @@
+# sysbox-deploy-k8s — installs Sysbox on every LEARNER node and registers
+# the `sysbox-runc` runtime with the node's container runtime (containerd
+# or CRI-O). Route B (multi-node) from this directory's README; for the
+# single-VM k3s target use ../bootstrap/k3s-sysbox-node.sh instead.
+#
+# Pinned to a released tag. Check https://github.com/nestybox/sysbox for
+# the current stable release before applying and bump `image:` + the
+# version arg together.
+#
+# Upstream reference:
+#   https://github.com/nestybox/sysbox/blob/master/docs/user-guide/install-k8s.md
+#
+# This file is a trimmed, node-selected version of the upstream
+# sysbox-deploy-k8s.yaml: the DaemonSet only lands on nodes labelled
+# practiceengine.dev/tier=t1 (the cluster/ module's learner node group),
+# never on a platform / control-plane pool.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sysbox-deploy-k8s
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sysbox-deploy-k8s
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    verbs: ["get"]
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["get", "list", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sysbox-deploy-k8s
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sysbox-deploy-k8s
+subjects:
+  - kind: ServiceAccount
+    name: sysbox-deploy-k8s
+    namespace: kube-system
+---
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: sysbox-runc
+handler: sysbox-runc
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: sysbox-deploy-k8s
+  namespace: kube-system
+  labels:
+    sysbox-install: "yes"
+spec:
+  selector:
+    matchLabels:
+      sysbox-install: "yes"
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        sysbox-install: "yes"
+    spec:
+      serviceAccountName: sysbox-deploy-k8s
+      # LEARNER nodes only. The cluster/ module's node group sets this
+      # label; a platform/control-plane pool must NOT carry it.
+      nodeSelector:
+        practiceengine.dev/tier: t1
+      # Tolerate the learner-node taint so the installer can land there.
+      tolerations:
+        - key: workload
+          operator: Equal
+          value: learner
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      hostPID: true
+      containers:
+        - name: sysbox-deploy-k8s
+          image: registry.nestybox.com/nestybox/sysbox-deploy-k8s:v0.6.7
+          imagePullPolicy: Always
+          command: ["bash", "-c", "/opt/sysbox/scripts/sysbox-deploy-k8s.sh install"]
+          lifecycle:
+            preStop:
+              exec:
+                command: ["bash", "-c", "/opt/sysbox/scripts/sysbox-deploy-k8s.sh cleanup"]
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: host-var-lib
+              mountPath: /var/lib
+            - name: host-run
+              mountPath: /run
+            - name: host-dev
+              mountPath: /dev
+            - name: host-etc
+              mountPath: /etc
+            - name: host-opt
+              mountPath: /mnt/host/opt
+            - name: host-systemd
+              mountPath: /mnt/host/lib/systemd/system
+            - name: host-usr-bin
+              mountPath: /mnt/host/usr/bin
+            - name: host-usr-local-bin
+              mountPath: /mnt/host/usr/local/bin
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+      volumes:
+        - name: host-var-lib
+          hostPath: { path: /var/lib }
+        - name: host-run
+          hostPath: { path: /run }
+        - name: host-dev
+          hostPath: { path: /dev }
+        - name: host-etc
+          hostPath: { path: /etc }
+        - name: host-opt
+          hostPath: { path: /opt }
+        - name: host-systemd
+          hostPath: { path: /lib/systemd/system }
+        - name: host-usr-bin
+          hostPath: { path: /usr/bin }
+        - name: host-usr-local-bin
+          hostPath: { path: /usr/local/bin }

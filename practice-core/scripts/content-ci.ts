@@ -75,9 +75,14 @@ interface TaskSpec {
   solution_apply?: string;
 }
 
+interface SeedRef {
+  fixture: string;
+  version?: string | number;
+}
+
 interface ActivitySpec {
   id: string;
-  environment: { tier: string; blueprint: string };
+  environment: { tier: string; blueprint: string; seed?: SeedRef[] };
   tasks: TaskSpec[];
   reference_solution?: { repo_path: string };
 }
@@ -173,10 +178,15 @@ async function applySolutions(rpc: OrchestratorRpc, environmentId: string, attem
       throw new Error(`solution_apply script not found: ${scriptPath}`);
     }
     const script = fs.readFileSync(scriptPath, 'utf-8');
+    // 90s, not 30s: a reference solution legitimately does more than a
+    // single kubectl call -- e.g. lab.k8s.storage's t2 deletes and
+    // recreates a Pod twice with readiness waits in between to prove PVC
+    // data survives a Pod restart. 30s is a learner-typing-speed budget,
+    // not a solution-script budget. The outer RPC deadline tracks it.
     const response = await rpc.call<any, any>(
       'ExecShell',
-      { environmentId, command: script, timeoutMs: 30_000, attemptId },
-      35_000,
+      { environmentId, command: script, timeoutMs: 90_000, attemptId },
+      95_000,
     );
     if (response.errorMessage) {
       throw new Error(`applying ${task.solution_apply} failed: ${response.errorMessage}`);
@@ -285,6 +295,26 @@ async function checkActivity(
   // (a real `gRPC Destroy failed: 7 PERMISSION_DENIED` against the live
   // orchestrator), not a hypothetical.
   const attemptId = randomUUID();
+
+  // Pass the activity's declared seed fixtures through to Provision (proto
+  // ProvisionRequest.fixtures, field 6). Without this the env is bare --
+  // e.g. a K8S_ASSERT lab seeded with fx.k3s-ready.v1 never gets the
+  // in-pod ~/.kube/config that fixture writes, so its solution_apply's
+  // `kubectl apply` can't run and the golden path fails for a reason that
+  // has nothing to do with the solution or validator. server.go's
+  // fixture.ApplyAll already tolerates an unimplemented fixture id (logs
+  // a WARNING, continues), so forwarding every seed entry is safe even
+  // for activities whose fixtures don't have handlers yet.
+  const fixtures = (spec.environment.seed ?? [])
+    .filter((s) => s && s.fixture)
+    .map((s) => ({
+      fixtureId: s.fixture,
+      version: s.version != null ? String(s.version) : '1',
+    }));
+  if (fixtures.length > 0) {
+    console.log(`  seed fixtures: ${fixtures.map((f) => f.fixtureId).join(', ')}`);
+  }
+
   const provisionResp = await rpc.call<any, any>(
     'Provision',
     {
@@ -292,6 +322,7 @@ async function checkActivity(
       blueprintId: spec.environment.blueprint,
       blueprintVersion: '1',
       tier: TIER_MAP[spec.environment.tier] ?? 'TIER_T1_SHARED_CONTAINER',
+      fixtures,
       ttlMinutes: 15,
       idleTimeoutMinutes: 10,
     },

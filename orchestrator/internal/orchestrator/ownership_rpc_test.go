@@ -107,7 +107,7 @@ func setupOwnershipTestServer(t *testing.T) (*Server, *pgxpool.Pool) {
 	}
 	t.Cleanup(nc.Close)
 
-	provisioner := k8s.NewProvisioner(clientset, restConfig, false)
+	provisioner := k8s.NewProvisioner(clientset, restConfig, k8s.ProvisionerConfig{})
 	rp := reaper.New(db, provisioner)
 	destroyer := NewDestroyer(db, provisioner, rp, nc)
 	tokens := wsgateway.NewTokenValidator("test-only-secret-not-used-for-real-auth")

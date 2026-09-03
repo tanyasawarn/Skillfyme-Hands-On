@@ -1,4 +1,4 @@
-import { Global, Module, OnModuleDestroy } from '@nestjs/common';
+import { Global, Inject, Module, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Kysely, PostgresDialect } from 'kysely';
 import { Pool } from 'pg';
@@ -24,12 +24,16 @@ export const KYSELY = Symbol('KYSELY_DB');
   exports: [KYSELY],
 })
 export class DatabaseModule implements OnModuleDestroy {
-  constructor() {}
+  constructor(@Inject(KYSELY) private readonly db: Kysely<Database>) {}
 
-  async onModuleDestroy() {
-    // Kysely/pg pool teardown is handled per-instance; explicit destroy hook
-    // left here so services relying on graceful shutdown (doc's reaper-style
-    // "assume the process can die mid-op" discipline) have a place to hook in
-    // once this module owns more than a single pool.
+  /**
+   * Drain the pg pool on shutdown. Without this, a Nest app context that
+   * built this module (integration tests via Test.createTestingModule,
+   * one-off scripts) leaves an idle-timeout timer + open socket that
+   * outlives the process's work — visible as jest's "did not exit"
+   * warning. `Kysely.destroy()` calls `pool.end()` underneath.
+   */
+  async onModuleDestroy(): Promise<void> {
+    await this.db.destroy();
   }
 }

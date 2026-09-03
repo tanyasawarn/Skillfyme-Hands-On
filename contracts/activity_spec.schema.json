@@ -93,7 +93,72 @@
             "properties": { "fixture": { "type": "string" } }
           }
         },
-        "cost_budget_usd": { "type": "number", "minimum": 0 }
+        "cost_budget_usd": { "type": "number", "minimum": 0 },
+        "cloud": {
+          "description": "Phase 3 (memory.md §5.3). CLOUD_ACCOUNT-tier only. `regions` is the allow-list the SCP framework grants for this activity's vended account (empty ⇒ the org default two regions). `sku_exceptions` lists otherwise-SCP-denied instance classes / services this blueprint legitimately needs (e.g. a GPU family for an ML project) — the Account Pool Manager writes these onto an account tag at claim time and the expensive-SKU SCP is conditioned on that tag. Adding an entry here is a security-review checkpoint (PLAN_PHASE3_PROJECTS.md A2).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "regions": { "type": "array", "items": { "type": "string" }, "maxItems": 4 },
+            "sku_exceptions": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+
+    "milestones": {
+      "description": "Phase 3 (PLAN.md 169, memory.md §12.3). PROJECT-mode only — the ordered gate sequence design→infra→implementation→hardening→final. Each milestone declares which of the activity's `tasks` (by key) it gates, an optional AI rubric slice, whether it needs a T3 environment provisioned, and its gate rule. `gate` = ALL_VALIDATORS_PASS (deterministic gate), RUBRIC_MIN_LEVEL (must reach `min_level`/5 on `rubric`), or BOTH. A hard-gated milestone (`blocking: true`) blocks the next milestone until it passes — memory.md §12.3: 'three weeks of implementation on a bad design teaches the wrong lesson and burns real cloud budget.' Absent on GUIDED_LAB / PRODUCTION_SIM.",
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "title", "gate", "environment_required", "task_keys"],
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": ["design", "infra", "implementation", "hardening", "final"]
+          },
+          "title": { "type": "string" },
+          "gate": { "type": "string", "enum": ["ALL_VALIDATORS_PASS", "RUBRIC_MIN_LEVEL", "BOTH"] },
+          "blocking": {
+            "type": "boolean",
+            "default": true,
+            "description": "true ⇒ the next milestone is LOCKED until this one reaches GATED_PASS"
+          },
+          "environment_required": {
+            "type": "boolean",
+            "description": "false for `design` (near-zero cost, no T3 account claimed); true for infra/implementation/hardening/final"
+          },
+          "task_keys": {
+            "type": "array",
+            "minItems": 1,
+            "description": "keys into this spec's `tasks[]` array that this milestone's :submit runs and gates on",
+            "items": { "type": "string" }
+          },
+          "rubric": {
+            "type": "string",
+            "description": "rubric id (content/rubrics/<id>.yaml) — required when gate is RUBRIC_MIN_LEVEL or BOTH, e.g. rub.architecture.v3 for `design`"
+          },
+          "min_level": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "description": "required when gate is RUBRIC_MIN_LEVEL or BOTH — the floor on the rubric's 1–5 scale (memory.md §12.3: design gate is level 3/5)"
+          }
+        }
+      }
+    },
+
+    "defence": {
+      "description": "Phase 3 (PLAN.md 173, memory.md §12.3). PROJECT-mode only — the milestone-5 viva. The question generator reads the learner's OWN milestone-1 design artifact and OWN commit history and produces `num_questions` grounded questions; the transcript is scored against `rubric` (rub.reasoning.v1) and human-reviewed for certification. Calls the model directly (not Phase 4's Mentor Service).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rubric"],
+      "properties": {
+        "rubric": { "type": "string" },
+        "num_questions": { "type": "integer", "minimum": 4, "maximum": 12, "default": 8 },
+        "human_review": { "type": "string", "enum": ["ALWAYS", "SAMPLED", "CERTIFICATION_ONLY"], "default": "CERTIFICATION_ONLY" }
       }
     },
 
@@ -209,7 +274,93 @@
                 "severity": { "type": "string", "enum": ["BLOCKING", "WARN"], "default": "BLOCKING" },
                 "on_fail": { "type": "string", "minLength": 1, "description": "required field per §3.2 design notes: generic failure text is the #1 cause of lab abandonment" },
                 "timeout_ms": { "type": "integer", "minimum": 1 },
-                "retry": { "type": "object" }
+                "retry": { "type": "object" },
+                "config": {
+                  "description": "Phase 3 (memory.md §6.2, §12.3). Per-type execution config for the T3 validator executors. Which sub-object applies is keyed off the sibling `type`. All optional so a minimal test spec need not fabricate one; the executor validates the shape it needs at run time and returns ERROR (never a learner-scored FAIL) if required config is absent.",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "iac_state": {
+                      "description": "IAC_STATE — Terraform state checks. `working_dir` is the repo-relative dir to run `terraform` in; `no_drift` runs `terraform plan -detailed-exitcode` and fails on exit 2; `require_remote_backend` fails if the backend is `local`; `forbid_secrets_in_state` scans the pulled state for high-entropy / known-key patterns.",
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "working_dir": { "type": "string" },
+                        "no_drift": { "type": "boolean", "default": true },
+                        "require_remote_backend": { "type": "boolean", "default": true },
+                        "forbid_secrets_in_state": { "type": "boolean", "default": true }
+                      }
+                    },
+                    "cloud_assert": {
+                      "description": "CLOUD_ASSERT — read-only cloud topology assertions run with a validator-scoped STS role (MintValidatorCredentials, scope cloud.read_only). `checks` is an ordered list of named assertions the executor knows how to evaluate (e.g. no_public_data_stores, encryption_at_rest, least_privilege_iam, vpc_has_private_subnets). `params` passes check-specific arguments.",
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["checks"],
+                      "properties": {
+                        "checks": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+                        "params": { "type": "object" }
+                      }
+                    },
+                    "test_suite": {
+                      "description": "TEST_SUITE — run the repo's own test command inside the T3 workspace and parse structured output. `command` is run via /bin/bash -c; `report_format` selects the parser; `report_path` is where the report lands; `min_pass_rate` (0–1) is the floor.",
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["command"],
+                      "properties": {
+                        "command": { "type": "string" },
+                        "report_format": { "type": "string", "enum": ["junit", "tap", "jest-json", "go-json"], "default": "junit" },
+                        "report_path": { "type": "string" },
+                        "min_pass_rate": { "type": "number", "minimum": 0, "maximum": 1, "default": 1 }
+                      }
+                    },
+                    "static_analysis": {
+                      "description": "STATIC_ANALYSIS — tfsec / checkov / trivy with authored thresholds. `tool` picks the scanner; `target` is the repo-relative path scanned; `max_severity_allowed` is the highest finding severity that still passes; `max_findings` caps count regardless of severity.",
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["tool"],
+                      "properties": {
+                        "tool": { "type": "string", "enum": ["tfsec", "checkov", "trivy"] },
+                        "target": { "type": "string" },
+                        "max_severity_allowed": { "type": "string", "enum": ["NONE", "LOW", "MEDIUM", "HIGH", "CRITICAL"], "default": "LOW" },
+                        "max_findings": { "type": "integer", "minimum": 0 }
+                      }
+                    },
+                    "chaos_probe": {
+                      "description": "CHAOS_PROBE — inject a failure into the learner's deployed system and assert it survives. `action` is the disturbance (reuses the InjectFault mechanism where it maps cleanly); `target_selector` scopes it; `health_check` is the HTTP probe that must stay green throughout; `recovery_timeout_ms` is how long the service has to re-stabilise.",
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["action", "health_check"],
+                      "properties": {
+                        "action": { "type": "string", "enum": ["kill_pod", "drain_node", "cordon_node", "delete_deployment_replica", "sever_dependency"] },
+                        "target_selector": { "type": "string" },
+                        "health_check": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["url"],
+                          "properties": {
+                            "url": { "type": "string" },
+                            "expect_status": { "type": "integer", "default": 200 },
+                            "interval_ms": { "type": "integer", "minimum": 100, "default": 1000 }
+                          }
+                        },
+                        "recovery_timeout_ms": { "type": "integer", "minimum": 1000, "default": 60000 }
+                      }
+                    },
+                    "perf_bench": {
+                      "description": "PERF_BENCH — drive load (k6) at the deployed system and assert a latency / throughput target. `script` is the repo-relative k6 script or an inline `target_url` + `rps`; `duration_s` is the run length; `p95_ms_max` / `error_rate_max` are the thresholds.",
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "script": { "type": "string" },
+                        "target_url": { "type": "string" },
+                        "rps": { "type": "integer", "minimum": 1 },
+                        "duration_s": { "type": "integer", "minimum": 1, "default": 60 },
+                        "p95_ms_max": { "type": "integer", "minimum": 1 },
+                        "error_rate_max": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.01 }
+                      }
+                    }
+                  }
+                }
               }
             }
           },

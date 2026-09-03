@@ -129,7 +129,14 @@ func Diff(ctx context.Context, provisioner *k8s.Provisioner, envID string, basel
 	if err != nil {
 		return nil, fmt.Errorf("capturing current state for diff: %w", err)
 	}
+	return diffMatrices(baseline, current), nil
+}
 
+// diffMatrices is the pure comparison half of Diff -- factored out so the
+// "didn't fix by breaking something else" logic (§7.3) is unit-testable
+// without a live cluster. One-directional: only worse-than-baseline is a
+// regression; improvement is never flagged.
+func diffMatrices(baseline, current HealthMatrix) []Regression {
 	var regressions []Regression
 
 	baselineDeployments := make(map[string]DeploymentHealth, len(baseline.Deployments))
@@ -184,5 +191,5 @@ func Diff(ctx context.Context, provisioner *k8s.Provisioner, envID string, basel
 		}
 	}
 
-	return regressions, nil
+	return regressions
 }

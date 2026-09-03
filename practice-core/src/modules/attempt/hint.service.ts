@@ -19,6 +19,22 @@ export interface HintReveal extends HintPreview {
   text: string;
 }
 
+export interface GuidedFallback {
+  taskKey: string;
+  /** The final authored guidance shown (the last hint level's text, or the
+   *  task's solution_apply hint if no hints authored). */
+  text: string;
+  /** Always true here -- the whole point of the fallback is that the
+   *  attempt is now assisted and this task earns zero positive BKT
+   *  evidence (doc §7.5). */
+  assisted: true;
+}
+
+/** Assistance-flag value written to attempt.assistance_flags when the
+ *  learner takes the "just tell me" guided fallback. EvaluationService
+ *  reads assistance_flags.length to set BktService.wasGenuineAttempt. */
+export const GUIDED_FALLBACK_FLAG = 'guided_fallback';
+
 /**
  * Doc §7.5 "just tell me" escalation contract (static-hint subset --
  * §7.5 as a whole assumes an AI mentor mediating the conversation, which
@@ -139,5 +155,88 @@ export class HintService {
       hasMoreAfterThis: hints.some((h) => h.level > next.level),
       text: next.text,
     };
+  }
+
+  /**
+   * Doc §7.5 step 40 -- the "just tell me" guided fallback. Reachable
+   * only once the hint ladder is exhausted (every authored level already
+   * revealed). Shows the final authored guidance and marks the attempt
+   * ASSISTED: 'guided_fallback' is appended to attempt.assistance_flags,
+   * which EvaluationService reads (assistance_flags.length === 0 ->
+   * wasGenuineAttempt) so this task then contributes ZERO positive
+   * evidence to BKT -- the learner still completes the lab, but their
+   * mastery estimate is not inflated by a told answer (doc §7.5:
+   * "assisted-flag propagation to BKT").
+   *
+   * Idempotent: calling it again once already flagged just re-returns the
+   * same guidance without re-appending the flag.
+   */
+  async guidedFallback(
+    attemptId: string,
+    taskKey: string,
+  ): Promise<GuidedFallback> {
+    const task = await this.getTaskSpec(attemptId, taskKey);
+    const hints = (task.hints ?? []).sort((a, b) => a.level - b.level);
+    const usedMaxLevel = await this.getUsedMaxLevel(attemptId, taskKey);
+
+    if (hints.length > 0 && hints.some((h) => h.level > usedMaxLevel)) {
+      throw new BadRequestException(
+        `hint ladder for task ${taskKey} is not yet exhausted -- reveal the remaining levels before the guided fallback (doc §7.5)`,
+      );
+    }
+
+    const attempt = findOrThrow(
+      await this.db
+        .selectFrom('attempt.attempt')
+        .select(['id', 'assistance_flags'])
+        .where('id', '=', attemptId)
+        .executeTakeFirst(),
+      `attempt ${attemptId} not found`,
+    );
+
+    const text =
+      hints.length > 0
+        ? hints[hints.length - 1].text
+        : `See the reference approach for task "${task.title ?? taskKey}".`;
+
+    const alreadyFlagged =
+      attempt.assistance_flags.includes(GUIDED_FALLBACK_FLAG);
+
+    if (!alreadyFlagged) {
+      await appendTypedEvent(this.events, {
+        attemptId,
+        actor: 'LEARNER',
+        type: 'SOLUTION_VIEWED',
+        payload: { task: taskKey, via: 'guided_fallback' },
+      });
+
+      await this.db.transaction().execute(async (trx) => {
+        await trx
+          .updateTable('attempt.attempt')
+          .set({
+            assistance_flags: sql`array_append(attempt.assistance_flags, ${GUIDED_FALLBACK_FLAG})`,
+          })
+          .where('id', '=', attemptId)
+          .execute();
+
+        // record the assist on the task row too, so replay / analytics
+        // and the results screen can show which task was told.
+        await trx
+          .insertInto('attempt.attempt_task_state')
+          .values({
+            attempt_id: attemptId,
+            task_key: taskKey,
+            assisted: true,
+          })
+          .onConflict((oc) =>
+            oc
+              .columns(['attempt_id', 'task_key'])
+              .doUpdateSet({ assisted: true }),
+          )
+          .execute();
+      });
+    }
+
+    return { taskKey, text, assisted: true };
   }
 }

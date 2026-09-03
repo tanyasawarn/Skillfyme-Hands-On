@@ -271,4 +271,110 @@ describe('HintService (integration, real Postgres) — doc §7.5 static hint lad
     >;
     expect(penalties.hints).toBeCloseTo(0.02, 5);
   });
+
+  // --- doc §7.5 step 40: "just tell me" guided fallback (PLAN.md G6) ---
+
+  it('guidedFallback rejects while the hint ladder is not yet exhausted', async () => {
+    const version = await publishWithHints();
+    const attemptId = await createAndStartAttempt(version.id);
+    await hints.reveal(attemptId, 't1'); // only level 1 used, 2 & 3 remain
+
+    await expect(hints.guidedFallback(attemptId, 't1')).rejects.toThrow(
+      /not yet exhausted/,
+    );
+  });
+
+  it('guidedFallback shows the final guidance, emits SOLUTION_VIEWED, and flags the attempt ASSISTED', async () => {
+    const version = await publishWithHints();
+    const attemptId = await createAndStartAttempt(version.id);
+    await hints.reveal(attemptId, 't1');
+    await hints.reveal(attemptId, 't1');
+    await hints.reveal(attemptId, 't1'); // ladder exhausted
+
+    const fallback = await hints.guidedFallback(attemptId, 't1');
+    expect(fallback.assisted).toBe(true);
+    expect(fallback.text).toContain('docker build'); // the last (level-3) hint text
+
+    const attempt = await db
+      .selectFrom('attempt.attempt')
+      .select('assistance_flags')
+      .where('id', '=', attemptId)
+      .executeTakeFirstOrThrow();
+    expect(attempt.assistance_flags).toContain('guided_fallback');
+
+    const solutionViewed = await db
+      .selectFrom('attempt.attempt_events')
+      .selectAll()
+      .where('attempt_id', '=', attemptId)
+      .where('type', '=', 'SOLUTION_VIEWED')
+      .execute();
+    expect(solutionViewed).toHaveLength(1);
+
+    const taskState = await db
+      .selectFrom('attempt.attempt_task_state')
+      .select('assisted')
+      .where('attempt_id', '=', attemptId)
+      .where('task_key', '=', 't1')
+      .executeTakeFirstOrThrow();
+    expect(taskState.assisted).toBe(true);
+  });
+
+  it('guidedFallback is idempotent — a second call does not re-flag or re-emit', async () => {
+    const version = await publishWithHints();
+    const attemptId = await createAndStartAttempt(version.id);
+    await hints.reveal(attemptId, 't1');
+    await hints.reveal(attemptId, 't1');
+    await hints.reveal(attemptId, 't1');
+
+    await hints.guidedFallback(attemptId, 't1');
+    await hints.guidedFallback(attemptId, 't1');
+
+    const attempt = await db
+      .selectFrom('attempt.attempt')
+      .select('assistance_flags')
+      .where('id', '=', attemptId)
+      .executeTakeFirstOrThrow();
+    expect(
+      attempt.assistance_flags.filter((f) => f === 'guided_fallback'),
+    ).toHaveLength(1);
+
+    const solutionViewed = await db
+      .selectFrom('attempt.attempt_events')
+      .selectAll()
+      .where('attempt_id', '=', attemptId)
+      .where('type', '=', 'SOLUTION_VIEWED')
+      .execute();
+    expect(solutionViewed).toHaveLength(1);
+  });
+
+  it('a guided-fallback assist propagates to BKT: the primary skill gets zero positive evidence on the assisted pass', async () => {
+    const version = await publishWithHints();
+    const attemptId = await createAndStartAttempt(version.id);
+    await hints.reveal(attemptId, 't1');
+    await hints.reveal(attemptId, 't1');
+    await hints.reveal(attemptId, 't1');
+    await hints.guidedFallback(attemptId, 't1');
+
+    const before = await db
+      .selectFrom('skill.skill_mastery')
+      .select('p_mastery')
+      .where('user_id', '=', userId)
+      .executeTakeFirst();
+
+    await attemptService.submit(attemptId);
+
+    const after = await db
+      .selectFrom('skill.skill_mastery')
+      .select(['p_mastery', 'evidence_count'])
+      .where('user_id', '=', userId)
+      .executeTakeFirstOrThrow();
+
+    // Evidence is still recorded (evidence_count increments), but because
+    // the attempt is assisted, BKT applies no learning transit -> mastery
+    // does not rise from a told answer (doc §7.5).
+    const pBefore = before ? Number(before.p_mastery) : null;
+    if (pBefore != null) {
+      expect(Number(after.p_mastery)).toBeLessThanOrEqual(pBefore + 1e-9);
+    }
+  });
 });

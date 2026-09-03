@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -310,6 +311,16 @@ func parseHTTPSLOSamples(stdout string) (total, success int) {
 // this function re-derives the equivalent via direct API + our own
 // jsonpath eval so it doesn't depend on a kubectl binary existing anywhere.
 func execK8sAssert(ctx context.Context, provisioner *k8s.Provisioner, req Request) (Result, error) {
+	// `kubectl exec <pod> [-c <container>] -- <cmd...>` is a distinct
+	// shape from `kubectl get`: several authored K8S_ASSERT validators
+	// check in-pod state that has no API-object equivalent (env vars a
+	// pod received via envFrom, a file the app wrote). Run the command in
+	// the pod via the exec API and compare its trimmed stdout to
+	// expect.value.
+	if pod, container, cmd, ok := parseKubectlExec(req.Run); ok {
+		return execK8sAssertExec(ctx, provisioner, req, pod, container, cmd)
+	}
+
 	parsed, err := parseKubectlCommand(req.Run)
 	if err != nil {
 		return Result{Status: StatusError}, err
@@ -321,7 +332,24 @@ func execK8sAssert(ctx context.Context, provisioner *k8s.Provisioner, req Reques
 		return Result{Status: StatusFail, Observed: map[string]any{"error": err.Error()}}, nil
 	}
 
-	observed, jpErr := evalJSONPath(obj, req.Expect["jsonpath"])
+	// Which jsonpath to evaluate against the fetched object:
+	//   - expect.jsonpath if the author set a real one ($.status.phase, ...)
+	//   - otherwise the `-o jsonpath='{...}'` expression the author wrote
+	//     into the `run` command itself. A lot of authored K8S_ASSERT
+	//     validators put the real selector only in `-o jsonpath=` and
+	//     leave expect.jsonpath as the default "$", which would otherwise
+	//     compare the *entire* resource object against a scalar `value`
+	//     and always FAIL. Honouring the run-command selector matches
+	//     what the author plainly intended and what a shell `kubectl get
+	//     ... -o jsonpath=...` would actually print.
+	jsonPathExpr := asString(req.Expect["jsonpath"])
+	if jsonPathExpr == "" || jsonPathExpr == "$" {
+		if fromRun := jsonpathFromRunCommand(req.Run); fromRun != "" {
+			jsonPathExpr = fromRun
+		}
+	}
+
+	observed, jpErr := evalJSONPath(obj, jsonPathExpr)
 	if jpErr != nil {
 		return Result{Status: StatusError}, jpErr
 	}
@@ -339,6 +367,99 @@ func execK8sAssert(ctx context.Context, provisioner *k8s.Provisioner, req Reques
 }
 
 // --- shared helpers --------------------------------------------------------
+
+func asString(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+// kubectlExecRe matches `kubectl exec <pod> [-c <container>|--container <container>]
+// [-it|-i|-t] -- <command...>`. The `--` separator is required (matches
+// how the authored validators are written and how kubectl itself
+// disambiguates its flags from the remote command).
+var kubectlExecRe = regexp.MustCompile(
+	`^kubectl\s+exec\s+(?:(?:-i|-t|-it|--stdin|--tty)\s+)*([a-zA-Z0-9._-]+)` +
+		`(?:\s+(?:-c|--container)[=\s]+([a-zA-Z0-9._-]+))?` +
+		`(?:\s+(?:-i|-t|-it|--stdin|--tty))*\s+--\s+(.+)$`,
+)
+
+// parseKubectlExec pulls (pod, container, argv) out of a `kubectl exec`
+// command string. ok is false for anything that isn't a `kubectl exec
+// ... -- ...` command (callers fall back to the `kubectl get` path).
+func parseKubectlExec(cmd string) (pod, container string, argv []string, ok bool) {
+	m := kubectlExecRe.FindStringSubmatch(strings.TrimSpace(cmd))
+	if m == nil {
+		return "", "", nil, false
+	}
+	fields := strings.Fields(m[3])
+	if len(fields) == 0 {
+		return "", "", nil, false
+	}
+	return m[1], m[2], fields, true
+}
+
+// execK8sAssertExec runs a `kubectl exec` K8S_ASSERT's remote command in
+// the target pod and compares its trimmed stdout to expect.value via the
+// same compareOp the `kubectl get` path uses. A non-zero exit from the
+// remote command is a FAIL (the asserted state isn't there), not an
+// executor ERROR.
+func execK8sAssertExec(ctx context.Context, provisioner *k8s.Provisioner, req Request, pod, container string, argv []string) (Result, error) {
+	ns := k8s.NamespaceForEnv(req.EnvironmentID)
+	out, err := execInNamedPod(ctx, provisioner, ns, pod, container, argv)
+	if err != nil {
+		return Result{Status: StatusFail, Observed: map[string]any{"error": err.Error()}}, nil
+	}
+	if out.ExitCode != 0 {
+		return Result{Status: StatusFail, Observed: map[string]any{
+			"exit_code": out.ExitCode, "stderr": strings.TrimSpace(out.Stderr),
+		}}, nil
+	}
+	observed := strings.TrimSpace(out.Stdout)
+	pass, cmpErr := compareOp(observed, req.Expect["op"], req.Expect["value"])
+	if cmpErr != nil {
+		return Result{Status: StatusError}, cmpErr
+	}
+	status := StatusFail
+	if pass {
+		status = StatusPass
+	}
+	return Result{Status: status, Observed: observed}, nil
+}
+
+// kubectlOJsonpathRe pulls the expression out of a `-o jsonpath='{...}'`
+// / `-o=jsonpath={...}` / `--output jsonpath="..."` flag in a kubectl
+// command. Tolerates single quotes, double quotes, or no quotes.
+var kubectlOJsonpathRe = regexp.MustCompile(
+	`(?:-o|--output)[=\s]+(?:jsonpath|go-template)=(?:'([^']*)'|"([^"]*)"|(\S+))`,
+)
+
+// jsonpathFromRunCommand returns the `{...}` template found in a kubectl
+// command's -o jsonpath flag, normalised to the "$.foo.bar" form
+// evalJSONPath expects (leading "$", no surrounding braces). Empty string
+// if the command has no such flag.
+func jsonpathFromRunCommand(cmd string) string {
+	m := kubectlOJsonpathRe.FindStringSubmatch(cmd)
+	if m == nil {
+		return ""
+	}
+	expr := m[1]
+	if expr == "" {
+		expr = m[2]
+	}
+	if expr == "" {
+		expr = m[3]
+	}
+	expr = strings.TrimSpace(expr)
+	expr = strings.TrimPrefix(expr, "{")
+	expr = strings.TrimSuffix(expr, "}")
+	if expr == "" {
+		return ""
+	}
+	if !strings.HasPrefix(expr, "$") {
+		expr = "$" + expr
+	}
+	return expr
+}
 
 func evalJSONPath(doc any, exprRaw any) (any, error) {
 	expr, _ := exprRaw.(string)

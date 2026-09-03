@@ -6,8 +6,14 @@ import {
   Inject,
   Param,
   Post,
+  Query,
 } from '@nestjs/common';
 import { AnalyticsService } from './analytics.service';
+import { CostDashboardService, type CostGrain } from './cost-dashboard.service';
+import {
+  AnalyticsQueryService,
+  type RollupGrain,
+} from '../analytics/analytics-query.service';
 import { SpecLintService } from '../content-ci/spec-lint.service';
 import { CatalogRepository } from '../catalog/catalog.repository';
 import { KYSELY } from '../../db/database.module';
@@ -57,6 +63,8 @@ import type { ActivitySpec } from '../catalog/activity-spec';
 export class AdminController {
   constructor(
     private readonly analytics: AnalyticsService,
+    private readonly cost: CostDashboardService,
+    private readonly analyticsQuery: AnalyticsQueryService,
     private readonly lint: SpecLintService,
     private readonly catalog: CatalogRepository,
     @Inject(KYSELY) private readonly db: Kysely<Database>,
@@ -205,6 +213,61 @@ export class AdminController {
     return this.analytics.getActivityHealth(auth.tenantId);
   }
 
+  // --- Phase 3 4.2/4.3: analytics rollups + cost dashboard ----------
+
+  /**
+   * Event rollups attempt → activity → course → tenant → global, served
+   * from ClickHouse when configured (4.1/4.2), Postgres otherwise. The
+   * `store` field in the response says which backend answered — the 4.2
+   * "identical numbers" check compares both.
+   */
+  @Get('analytics/rollup')
+  async analyticsRollup(
+    @AuthUser() auth: AuthClaims,
+    @Query('grain') grain: RollupGrain = 'activity',
+    @Query('hours') hours = '24',
+  ) {
+    const rows = await this.analyticsQuery.eventRollup(
+      auth.tenantId,
+      normalizeRollupGrain(grain),
+      Number(hours) || 24,
+    );
+    return { store: this.analyticsQuery.store(), grain, rows };
+  }
+
+  /**
+   * Blended cost (compute + cloud + AI) per learner / course / activity /
+   * tenant, from env.usage_meter (4.3 / B10). Empty when the orchestrator's
+   * env schema isn't present.
+   */
+  @Get('cost/by-grain')
+  async costByGrain(
+    @AuthUser() auth: AuthClaims,
+    @Query('grain') grain: CostGrain = 'activity',
+    @Query('days') days = '30',
+  ) {
+    return this.cost.costByGrain(
+      auth.tenantId,
+      normalizeCostGrain(grain),
+      Number(days) || 30,
+    );
+  }
+
+  /** Per-account spend + quarantine flags (§10.3). */
+  @Get('cost/accounts')
+  async costAccounts(@Query('days') days = '30') {
+    return this.cost.accountSpend(Number(days) || 30);
+  }
+
+  /** Budget-breach / quarantine history for the caller's tenant. */
+  @Get('cost/budget-breaches')
+  async budgetBreaches(
+    @AuthUser() auth: AuthClaims,
+    @Query('limit') limit = '50',
+  ) {
+    return this.cost.budgetBreachHistory(auth.tenantId, Number(limit) || 50);
+  }
+
   /**
    * dropoff/validators are keyed by activityId with no tenant column in
    * their own query (see analytics.service.ts) -- without this check an
@@ -224,4 +287,20 @@ export class AdminController {
       throw new BadRequestException('activity not found');
     }
   }
+}
+
+function normalizeRollupGrain(g: string): RollupGrain {
+  return (['activity', 'course', 'tenant', 'global'] as const).includes(
+    g as RollupGrain,
+  )
+    ? (g as RollupGrain)
+    : 'activity';
+}
+
+function normalizeCostGrain(g: string): CostGrain {
+  return (['learner', 'course', 'activity', 'tenant'] as const).includes(
+    g as CostGrain,
+  )
+    ? (g as CostGrain)
+    : 'activity';
 }

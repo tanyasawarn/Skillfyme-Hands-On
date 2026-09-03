@@ -1,0 +1,24 @@
+# The RuntimeClass the orchestrator's applyT2PodShape references for T2
+# pods (ORCHESTRATOR_T2_RUNTIME_CLASS, default "sysbox-runc").
+#
+# Safe to apply to any cluster: creating a RuntimeClass does not require
+# Sysbox to be installed. A pod that *references* it before Sysbox is
+# installed on a node fails admission with
+#   RuntimeClass "sysbox-runc" not found
+# which is exactly what internal/k8s/provision_t2_live_test.go's negative
+# branch asserts, and honest behaviour (no silent fallback to an
+# unisolated container).
+#
+# The "sysbox-runc" handler name is what sysbox-deploy-k8s / the Sysbox
+# .deb registers in containerd's config as
+#   [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.sysbox-runc]
+# so this name must match on both sides.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: sysbox-runc
+handler: sysbox-runc
+# No scheduling.nodeSelector here: Sysbox runs on the SAME shared learner
+# node pool as T1 (the ₹100/user decision — no dedicated pool). The
+# workspace pod already carries the learner-node toleration for every
+# tier via createWorkspacePod.

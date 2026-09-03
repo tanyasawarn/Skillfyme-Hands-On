@@ -25,6 +25,12 @@ import type { EventStoreRepository } from './event-store.repository';
  * to handle "an event type it doesn't specifically branch on" as a
  * no-op default) stays exhaustively checkable against the real contract
  * shape.
+ *
+ * Phase 3 (0.8) added the Project and Cloud-account categories:
+ * MILESTONE_GATED, DEFENCE_MESSAGE (Practice Core producers), and
+ * ACCOUNT_CLAIMED / ACCOUNT_NUKED / ACCOUNT_QUARANTINED (Orchestrator
+ * producers). Payload schemas: contracts/events/{milestone_gated,
+ * defence_message,account_claimed,account_nuked,account_quarantined}.schema.json.
  */
 export const ATTEMPT_EVENT_TYPES = [
   // Lifecycle
@@ -64,7 +70,14 @@ export const ATTEMPT_EVENT_TYPES = [
   // Scenario
   'TICKET_OPENED',
   'ESCALATION_FIRED',
+  // Project (Phase 3)
   'MILESTONE_SUBMITTED',
+  'MILESTONE_GATED',
+  'DEFENCE_MESSAGE',
+  // Cloud account (Phase 3 — Orchestrator producers)
+  'ACCOUNT_CLAIMED',
+  'ACCOUNT_NUKED',
+  'ACCOUNT_QUARANTINED',
 ] as const;
 
 export type AttemptEventType = (typeof ATTEMPT_EVENT_TYPES)[number];

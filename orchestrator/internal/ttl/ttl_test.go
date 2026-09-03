@@ -19,6 +19,7 @@ func TestTTLValues_MatchDocumentedDefaults(t *testing.T) {
 		want time.Duration
 	}{
 		{"EnvironmentDefault (doc §5.5)", EnvironmentDefault, 90 * time.Minute},
+		{"EnvironmentDefaultT2 (t2-cost-optimization.md §3.1)", EnvironmentDefaultT2, 45 * time.Minute},
 		{"IdleTimeoutDefault (doc §5.6)", IdleTimeoutDefault, 15 * time.Minute},
 		{"WarmPool (doc §5.5)", WarmPool, 30 * time.Minute},
 		{"SessionToken", SessionToken, 30 * time.Minute},
@@ -43,5 +44,14 @@ func TestWarmPool_ShorterThanEnvironmentDefault(t *testing.T) {
 func TestSessionToken_ShorterThanEnvironmentDefault(t *testing.T) {
 	if SessionToken >= EnvironmentDefault {
 		t.Errorf("SessionToken (%v) must be shorter than EnvironmentDefault (%v)", SessionToken, EnvironmentDefault)
+	}
+}
+
+func TestEnvironmentDefaultT2_ShorterThanT1Default(t *testing.T) {
+	// t2-cost-optimization.md §3.1: at T2's $0.10-0.35/env-hr band, a
+	// walked-away microVM on the 90-min T1 default burns ~2x its intended
+	// per-attempt cost. The T2 default must stay strictly shorter.
+	if EnvironmentDefaultT2 >= EnvironmentDefault {
+		t.Errorf("EnvironmentDefaultT2 (%v) must be shorter than EnvironmentDefault (%v)", EnvironmentDefaultT2, EnvironmentDefault)
 	}
 }

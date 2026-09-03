@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.practiceengine.internal/events/defence_message.schema.json",
+  "title": "DefenceMessagePayload",
+  "description": "Phase 3 (PLAN.md 173, memory.md §12.3). One turn of the milestone-5 defence viva. The full transcript is later scored against rub.reasoning.v1 and human-reviewed for certification.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["role", "turn"],
+  "properties": {
+    "role": { "type": "string", "enum": ["EXAMINER", "LEARNER"] },
+    "turn": { "type": "integer", "minimum": 1, "description": "1-based turn index within this attempt's viva" },
+    "question_ref": { "type": "string", "description": "on EXAMINER turns: a stable id for the generated question, grounding it to a design-doc section or commit sha" },
+    "text_hash": { "type": "string", "description": "sha256 of the turn text; the text itself is stored in attempt.defence_transcript, not the event payload" }
+  }
+}

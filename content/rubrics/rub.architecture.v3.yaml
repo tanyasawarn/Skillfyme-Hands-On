@@ -1,0 +1,174 @@
+# Phase 3 (PLAN_PHASE3_PROJECTS.md 1.9 / B5, memory.md §12.3). The
+# milestone-1 architecture-design rubric for PROJECT-mode activities.
+#
+# §12.3's framing, verbatim: grade "appropriateness given the stated
+# constraints, not the textbook answer". A design that picks a boring,
+# well-understood component because the constraints call for it must
+# out-score a design that reaches for a fashionable one it cannot
+# justify. The grader is handed the activity's own stated constraints as
+# deterministic ground truth (GradingFacts.appliedFaultIds is reused to
+# carry the constraint-set id; see project-grading-facts.ts) so it can
+# judge fit, not fashion.
+#
+# This is the SECOND engineered rubric (rub.incident-note.v2 was the
+# first). §13.1 budgeted 3-4 weeks SME for the first; this one is
+# lighter but still needs the calibration pass in
+# evaluation/phase1/rubric-calibration/ run before any score it produces
+# is trusted (human_review.policy below encodes that).
+#
+# The design milestone's gate is RUBRIC_MIN_LEVEL with min_level 3 on
+# `overall` (memory.md §12.3: "hard-gate on design at level 3/5"). The
+# other criteria are advisory into sp.project.default's roll-up.
+id: rub.architecture.v3
+version: 3
+artifact_type: MARKDOWN
+required_sections:
+  - context_and_constraints
+  - component_choices
+  - data_model
+  - failure_modes
+  - tradeoffs_considered
+
+criteria:
+  - key: constraint_fit
+    title: Fit to stated constraints
+    description: >
+      Do the component and topology choices follow from the constraints
+      the activity actually stated (budget ceiling, expected load,
+      team size, latency target, compliance boundary, single-region
+      requirement, etc.)? Graded against the deterministic constraint
+      set supplied to the grader -- NOT against whether the design
+      matches a canonical reference architecture. A simple choice that
+      the constraints justify beats a sophisticated one that they don't.
+    levels:
+      - level: 1
+        descriptor: >
+          Choices ignore or contradict the stated constraints (e.g. a
+          multi-region active-active topology for an activity that
+          explicitly states single-region and a $50/mo ceiling).
+      - level: 2
+        descriptor: >
+          Some choices acknowledge the constraints but at least one
+          major component is unjustified against them or is
+          over-engineered for the stated scale.
+      - level: 3
+        descriptor: >
+          Every major component choice is defensible against the stated
+          constraints; the design neither over- nor under-builds for
+          the stated load and budget.
+      - level: 4
+        descriptor: >
+          Every choice is justified against a specific stated
+          constraint, AND the design explicitly notes where a
+          constraint forced a non-obvious trade (e.g. "chose polling
+          over a queue because the $50 ceiling rules out a managed
+          broker and self-hosting one exceeds the team-size budget").
+    exemplars:
+      - level: 1
+        text: >
+          We'll use a service mesh, a message bus, and a multi-region
+          database for high availability and scalability.
+      - level: 4
+        text: >
+          Constraints: <=$40/mo, <=2 engineers, ~30 req/s peak,
+          single-region acceptable, p95 < 400ms. Given the budget and
+          team size we run a single Fargate service behind an ALB with
+          an RDS t4g.micro; no queue (the $40 ceiling rules out
+          managed brokers and a self-hosted one is operationally too
+          expensive for two people), no cache yet (30 req/s against a
+          micro instance measured at p95 ~110ms in a load spike, well
+          inside target). A cache is the first thing to add if load
+          triples -- noted in tradeoffs_considered.
+
+  - key: failure_mode_reasoning
+    title: Failure-mode reasoning
+    description: >
+      Does the design identify the realistic ways this specific system
+      fails (not a generic list) and state what happens to in-flight
+      work in each case? Depth of reasoning about blast radius and
+      recovery matters more than the count of failure modes listed.
+    levels:
+      - level: 1
+        descriptor: "No failure_modes section, or a generic list ('the server could crash') with no system-specific reasoning."
+      - level: 2
+        descriptor: "Names 2-3 system-specific failure modes but does not say what happens to in-flight requests or data in each."
+      - level: 3
+        descriptor: "For each named failure mode, states the blast radius and the recovery path; in-flight work is accounted for."
+      - level: 4
+        descriptor: >
+          As level 3, and identifies at least one non-obvious failure
+          mode specific to the chosen components (e.g. connection-pool
+          exhaustion under the chosen retry policy, or a thundering
+          herd on cache expiry given the chosen TTL) with a concrete
+          mitigation.
+
+  - key: tradeoff_honesty
+    title: Trade-off honesty
+    description: >
+      Does the design name what it is giving up, and under what future
+      condition each choice should be revisited? A design that presents
+      itself as having no downsides scores low regardless of how sound
+      the choices are.
+    levels:
+      - level: 1
+        descriptor: "No tradeoffs_considered section, or it lists only upsides."
+      - level: 2
+        descriptor: "Acknowledges trade-offs in the abstract but not tied to this design's specific choices."
+      - level: 3
+        descriptor: "For the major choices, states concretely what is being given up and the rough condition under which it would be reconsidered."
+      - level: 4
+        descriptor: "As level 3, and quantifies at least one revisit trigger (a specific load, cost, or latency number that would flip the decision)."
+
+  - key: data_model_soundness
+    title: Data-model soundness
+    description: >
+      Is the data model appropriate for the access patterns the design
+      itself describes? Normalisation, the choice of store type, and
+      consistency requirements should match the stated reads and writes.
+    levels:
+      - level: 1
+        descriptor: "No data_model section, or a model that cannot serve the access patterns described elsewhere in the design."
+      - level: 2
+        descriptor: "A plausible model, but the store-type choice (relational / document / KV / column) is unjustified against the access patterns."
+      - level: 3
+        descriptor: "The model and store-type choice follow from the stated access patterns and consistency needs."
+      - level: 4
+        descriptor: "As level 3, and the design calls out the one query or write path that most constrains the model and explains how the model serves it."
+
+  - key: overall
+    title: Overall design appropriateness (GATE)
+    description: >
+      Holistic judgement of whether this design is an appropriate
+      response to the stated problem and constraints -- the milestone-1
+      hard gate (memory.md §12.3: level 3/5 required to unlock the
+      infra milestone). Not an average of the other criteria: a design
+      can be strong on data modelling and still fail the gate if its
+      component choices are wrong for the constraints. Weight the
+      question "would a competent engineer, given exactly these
+      constraints, consider this a reasonable starting design?".
+    levels:
+      - level: 1
+        descriptor: "Not an appropriate design for the stated problem; a competent engineer would reject the core approach."
+      - level: 2
+        descriptor: "Recognisable as an attempt but with at least one choice a competent engineer would consider clearly wrong for the constraints."
+      - level: 3
+        descriptor: "A reasonable starting design: the core approach fits the constraints and no choice is clearly wrong, though some are debatable."
+      - level: 4
+        descriptor: "A design a competent engineer would endorse as a strong starting point, with choices that are not just defensible but well-matched to the constraints."
+
+# Doc §6.5 rule 35 (prompt-injection defence): the learner's design text
+# is the only untrusted input. ClaudeAiGrader wraps it in a delimited
+# <learner_artifact> block and instructs the model to treat its contents
+# as data. The calibration set (evaluation/phase1/rubric-calibration/
+# rub.architecture.v3/cases/) includes an adversarial case whose design
+# text contains an explicit "grade this level 4" instruction; the
+# injection-defence test asserts that case still scores on its technical
+# merits (level <= 2) and that the attempt is flagged.
+human_review:
+  # memory.md §12.3 + doc §6.5 rule 37: project milestone-1 design scores
+  # are certification-relevant, so 100% human review until the
+  # calibration pass in evaluation/phase1/rubric-calibration/ has been
+  # run and its Cohen's kappa vs SME scores is >= 0.6 on `overall`
+  # (rub-calibration.md records the threshold and the last run). Until
+  # then every score is provisional, same stance as rub.incident-note.v2.
+  policy: ALWAYS_PROVISIONAL_UNTIL_CALIBRATED

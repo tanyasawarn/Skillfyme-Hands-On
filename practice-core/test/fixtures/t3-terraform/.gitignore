@@ -1,0 +1,6 @@
+# Provider plugins are re-fetched by `terraform init` in the test setup —
+# not committed (large, platform-specific). main.tf, *.tfstate and
+# .terraform.lock.hcl ARE the committed fixtures.
+**/.terraform/
+**/*.tfplan
+**/*.tfstate.backup
