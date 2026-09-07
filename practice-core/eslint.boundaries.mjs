@@ -37,6 +37,11 @@ const SEAM = [
   // exported from EvaluationModule.
   'ai-grader.interface',
   'rubric.repository',
+  // Phase 3 3.8: the project module's defence-viva generator (RealVivaModel)
+  // reuses the same provider-neutral forced-tool caller as the AI grader
+  // (LLM_PROVIDER / GROQ_API_KEY / ANTHROPIC_API_KEY select the backend).
+  // The token + factory are exported from EvaluationModule.
+  'llm-tool-call.port',
 ];
 
 // (^|/)                     -- start of specifier, or a path separator

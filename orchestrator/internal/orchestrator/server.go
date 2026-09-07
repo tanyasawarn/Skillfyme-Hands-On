@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,6 +28,8 @@ import (
 	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/metrics"
 	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/reaper"
 	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/regression"
+	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/snapshotstate"
+	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/t3driver"
 	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/ttl"
 	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/validation"
 	"github.com/tanyasawarn/skillfyme-hands-on/orchestrator/internal/warmpool"
@@ -144,6 +148,36 @@ type Server struct {
 	// PLAN.md M1.14's "security baseline audit" line item. See
 	// internal/audit's own package doc for scope and rationale.
 	audit *audit.Logger
+
+	// t3 is the PLAN.md Phase 3 T3 (TIER_T3_CLOUD_ACCOUNT) wiring:
+	// the driver (account claim + workspace pod + STS broker) and the
+	// snapshot/restore manager (IaC-state suspend/resume). Nil unless
+	// CLOUD_ACCOUNTS_MODE is `fake` (local-real) or `real` -- every T3
+	// code path below checks s.t3 != nil first and returns
+	// FailedPrecondition (not a panic, not a silent T1 downgrade) when
+	// T3 isn't wired, exactly like the T2 gate.
+	t3 *t3Wiring
+}
+
+// t3Wiring bundles the T3 components so NewServer's signature doesn't
+// grow two more positional args and so a nil check is one field, not two.
+type t3Wiring struct {
+	driver   *t3driver.Driver
+	snapshot *snapshotstate.Manager
+	// attemptEnv lets the credential broker's CredsWriter resolve
+	// attempt_id -> env_id (the broker only ever sees attempt_id). The
+	// Provision handler populates it before the driver starts the broker.
+	attemptEnv interface {
+		Set(attemptID, envID string)
+		Delete(attemptID string)
+	}
+	// region + budget defaults used when the ProvisionRequest / activity
+	// spec doesn't carry them.
+	defaultRegion string
+	defaultBudget float64
+	// tfWorkspaceDir is the Terraform root inside the workspace pod that
+	// Snapshot's `terraform state pull` runs in.
+	tfWorkspaceDir string
 }
 
 func NewServer(provisioner *k8s.Provisioner, warmPool *warmpool.Manager, meter *costmeter.Meter, rp *reaper.Reaper, db *pgxpool.Pool, tokens TokenRegistrar, idle IdleTracker, destroyer *Destroyer, wsGatewayBaseURL string, t2Enabled bool) *Server {
@@ -163,6 +197,30 @@ func NewServer(provisioner *k8s.Provisioner, warmPool *warmpool.Manager, meter *
 		defaultTTL:       ttl.EnvironmentDefault,
 		t2Enabled:        t2Enabled,
 	}
+}
+
+// EnableT3 wires the Phase 3 T3 tier onto an already-constructed Server.
+// Called by cmd/orchestrator after setupCloudLifecycle when
+// CLOUD_ACCOUNTS_MODE is `fake` or `real`. Kept as a setter (same
+// pattern as Destroyer.SetMeter / SetIdleTracker) rather than a
+// NewServer arg so the Phase 1 construction path is byte-for-byte
+// unchanged when T3 is off.
+func (s *Server) EnableT3(driver *t3driver.Driver, snap *snapshotstate.Manager, attemptEnv interface {
+	Set(attemptID, envID string)
+	Delete(attemptID string)
+}, defaultRegion string, defaultBudget float64, tfWorkspaceDir string) {
+	if tfWorkspaceDir == "" {
+		tfWorkspaceDir = "/workspace"
+	}
+	s.t3 = &t3Wiring{
+		driver:         driver,
+		snapshot:       snap,
+		attemptEnv:     attemptEnv,
+		defaultRegion:  defaultRegion,
+		defaultBudget:  defaultBudget,
+		tfWorkspaceDir: tfWorkspaceDir,
+	}
+	slogger.Info("T3 tier enabled (TIER_T3_CLOUD_ACCOUNT)", "region", defaultRegion, "tf_workspace_dir", tfWorkspaceDir)
 }
 
 // Provision implements doc §5.5's pipeline: pool match (warm-pool CAS) ->
@@ -194,14 +252,44 @@ func NewServer(provisioner *k8s.Provisioner, warmPool *warmpool.Manager, meter *
 // microVM isolation and got a shared gVisor sandbox instead without
 // being told would be a real security discrepancy, not a graceful
 // degradation.
+//
+// T3 (TIER_T3_CLOUD_ACCOUNT) resolves to k8s.TierT3CloudAccount when the
+// T3 tier is wired (t3Enabled), else FailedPrecondition -- same "the
+// driver exists, the precondition is unmet" stance as T2. This makes
+// resolveTier a TOTAL decision over the proto enum: a caller gets a
+// definite (tier, err) for every value, no value falls through to a
+// silent default. Provision() still routes a T3 result to provisionT3
+// (no warm pool, no k8s.Provisioner.Provision) -- resolveTier decides
+// WHICH tier, provisionT3 knows HOW to build it. The Provision() T3
+// branch stays (it runs before this call) so the T3 path never touches
+// the T1/T2 warm-pool logic below it; this function's T3 case is the
+// belt-and-braces "every enum value has an answer here" guarantee and
+// the thing server_test.go pins.
 func resolveTier(requestedTier pb.Tier, t2Enabled bool) (k8s.Tier, error) {
-	if requestedTier != pb.Tier_TIER_T2_ISOLATED_MICROVM {
+	return resolveTierT3(requestedTier, t2Enabled, false)
+}
+
+// resolveTierT3 is resolveTier with the T3-enabled flag threaded through.
+// resolveTier keeps its 2-arg signature for the existing T1/T2 call site
+// and its unit tests; the Provision handler calls this form so the T3
+// case reflects whether s.t3 is actually wired.
+func resolveTierT3(requestedTier pb.Tier, t2Enabled, t3Enabled bool) (k8s.Tier, error) {
+	switch requestedTier {
+	case pb.Tier_TIER_T2_ISOLATED_MICROVM:
+		if !t2Enabled {
+			return k8s.TierT1SharedContainer, status.Error(codes.FailedPrecondition, "T2 (TIER_T2_ISOLATED_MICROVM) is not enabled on this orchestrator -- PLAN.md's Phase 2 sequencing gate (zero orphans sustained) has not been confirmed for this deployment; set ORCHESTRATOR_T2_ENABLED=true only after that track record is verified")
+		}
+		return k8s.TierT2IsolatedMicroVM, nil
+	case pb.Tier_TIER_T3_CLOUD_ACCOUNT:
+		if !t3Enabled {
+			return k8s.TierT1SharedContainer, status.Error(codes.FailedPrecondition, "T3 (TIER_T3_CLOUD_ACCOUNT) is not enabled on this orchestrator -- set CLOUD_ACCOUNTS_MODE=fake (local-real) or =real")
+		}
+		return k8s.TierT3CloudAccount, nil
+	default:
+		// T0_BROWSER / T1_SHARED_CONTAINER / UNSPECIFIED all map to T1
+		// (this package's long-standing default; T0 never reaches here).
 		return k8s.TierT1SharedContainer, nil
 	}
-	if !t2Enabled {
-		return k8s.TierT1SharedContainer, status.Error(codes.FailedPrecondition, "T2 (TIER_T2_ISOLATED_MICROVM) is not enabled on this orchestrator -- PLAN.md's Phase 2 sequencing gate (zero orphans sustained) has not been confirmed for this deployment; set ORCHESTRATOR_T2_ENABLED=true only after that track record is verified")
-	}
-	return k8s.TierT2IsolatedMicroVM, nil
 }
 
 // resolveEnvTTL is the pure ttl-selection decision Provision applies --
@@ -221,6 +309,31 @@ func resolveEnvTTL(tier k8s.Tier, ttlMinutes int32, t1Default time.Duration) tim
 		return ttl.EnvironmentDefaultT2
 	}
 	return t1Default
+}
+
+// parseT3Hints unpacks the "region=<r>;budget=<usd>" string a T3
+// ProvisionRequest packs into network_policy (see provisionT3's comment
+// for why that field). Either key may be missing; a missing/invalid
+// value falls back to the passed default. Pure fn, unit-tested.
+func parseT3Hints(s string, defRegion string, defBudget float64) (region string, budget float64) {
+	region, budget = defRegion, defBudget
+	for _, part := range strings.Split(s, ";") {
+		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		switch strings.TrimSpace(kv[0]) {
+		case "region":
+			if v := strings.TrimSpace(kv[1]); v != "" {
+				region = v
+			}
+		case "budget":
+			if v, err := strconv.ParseFloat(strings.TrimSpace(kv[1]), 64); err == nil && v > 0 {
+				budget = v
+			}
+		}
+	}
+	return region, budget
 }
 
 // checkEnvironmentOwnership is the ownership decision shared by every
@@ -380,9 +493,26 @@ func (s *Server) Provision(ctx context.Context, req *pb.ProvisionRequest) (resp 
 	// Doc §5.1's tier-selection rule: the caller (Dev B's Attempt
 	// Service, resolving an activity's environment.tier) declares which
 	// tier it needs; this RPC provisions it, it doesn't choose it.
-	tier, err := resolveTier(req.Tier, s.t2Enabled)
+	// resolveTierT3 is a TOTAL decision over the proto enum (every value
+	// -> a definite (tier, err)); it enforces both the T2 and T3
+	// enablement gates in one place.
+	tier, err := resolveTierT3(req.Tier, s.t2Enabled, s.t3 != nil && s.t3.driver != nil)
 	if err != nil {
 		return nil, err
+	}
+
+	// PLAN.md Phase 3: T3 (TierT3CloudAccount) is a wholly different
+	// provision path -- claim a vended sandbox account + start the STS
+	// broker + start a workspace pod on the platform cluster, with no
+	// warm pool and no k8s.Provisioner.Provision. resolveTierT3 above
+	// already decided WHICH tier and passed the enablement gate;
+	// provisionT3 knows HOW to build it. This branch must run before the
+	// warm-pool / k8s.Provisioner code below, which is T1/T2-only.
+	if tier == k8s.TierT3CloudAccount {
+		envID = uuid.New().String()
+		resp, perr := s.provisionT3(ctx, req, envID)
+		err = perr // for the deferred audit/metrics closure
+		return resp, perr
 	}
 
 	// Doc §5.5 step 1: POOL MATCH. Attempt a warm-pool claim first; on
@@ -626,18 +756,206 @@ func (s *Server) connectionEndpoints(attemptID, envID string) (*pb.ConnectRespon
 	}, nil
 }
 
-// Snapshot is a stub for Phase 1: doc §7 (project mode) and its
-// milestone-suspend flow are Phase 3 scope (PLAN.md). Guided labs
-// (Phase 1's only mode) don't suspend/resume workspaces -- an abandoned
-// lab attempt is simply re-provisioned from the fixture on resume (doc
-// §1.5: "labs N=15min... kill fast"), so this RPC exists on the wire
-// contract (forward-compatible) but returns Unimplemented until Phase 3.
-func (s *Server) Snapshot(ctx context.Context, req *pb.SnapshotRequest) (*pb.SnapshotResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "snapshot/restore is Phase 3 scope (project mode workspaces)")
+// Snapshot captures a T3 project workspace's IaC state (Terraform state
+// reference + filtered kubectl inventory + cloud resource inventory) to
+// a manifest blob, and tears the compute down -- PLAN.md Phase 3
+// integration point ("Dev B's Attempt Service calls Dev A's Snapshot/
+// Restore RPCs ... at the IaC-state level"). Only T3 environments
+// snapshot: guided labs (T1) re-provision from the fixture on resume, so
+// a Snapshot call for a non-T3 env is a caller error, not Unimplemented.
+func (s *Server) Snapshot(ctx context.Context, req *pb.SnapshotRequest) (resp *pb.SnapshotResponse, err error) {
+	if s.t3 == nil || s.t3.snapshot == nil {
+		return nil, status.Error(codes.FailedPrecondition, "T3 tier is not enabled on this orchestrator (CLOUD_ACCOUNTS_MODE unset) -- snapshot/restore only applies to TIER_T3_CLOUD_ACCOUNT project workspaces")
+	}
+	if req.EnvironmentId == "" || req.AttemptId == "" {
+		return nil, status.Error(codes.InvalidArgument, "environment_id and attempt_id are required")
+	}
+	if err = s.requireEnvironmentOwnership(ctx, req.EnvironmentId, req.AttemptId); err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		outcome := audit.Success
+		errMsg := ""
+		if err != nil {
+			outcome = audit.Failure
+			errMsg = err.Error()
+		}
+		s.audit.Record(context.Background(), audit.Entry{
+			EnvironmentID: req.EnvironmentId,
+			AttemptID:     req.AttemptId,
+			Action:        audit.ActionSnapshot,
+			Outcome:       outcome,
+			Detail:        map[string]any{"reason": req.Reason},
+			ErrorMessage:  errMsg,
+		})
+	}()
+
+	// Recover the account id + namespace + tf root for this T3 env.
+	var namespace, accountID, tfDir string
+	if qerr := s.db.QueryRow(ctx, `
+		SELECT namespace, COALESCE(cloud_account_id, ''), COALESCE(tf_workspace_dir, '/workspace')
+		  FROM env.environment WHERE id = $1`, req.EnvironmentId).Scan(&namespace, &accountID, &tfDir); qerr != nil {
+		return nil, status.Errorf(codes.NotFound, "no environment row for %s: %v", req.EnvironmentId, qerr)
+	}
+
+	// "suspend" (the default project idle-suspend) tears the compute
+	// down; a "periodic"/"pre_reset" snapshot keeps it running.
+	destroyCompute := req.Reason == "" || req.Reason == "suspend" || req.Reason == "preemption"
+
+	res, serr := s.t3.snapshot.Snapshot(ctx, snapshotstate.SnapshotInput{
+		AttemptID:      req.AttemptId,
+		EnvID:          req.EnvironmentId,
+		Namespace:      namespace,
+		AccountID:      accountID,
+		TFWorkspaceDir: tfDir,
+		DestroyCompute: destroyCompute,
+	})
+	if serr != nil {
+		return nil, status.Errorf(codes.Internal, "snapshot failed: %v", serr)
+	}
+
+	if destroyCompute {
+		// Stop the broker + release the account (nuke + verify). The
+		// snapshot manager already dropped the pod; the driver Destroy
+		// path owns the account + broker teardown.
+		if derr := s.t3.driver.Destroy(ctx, req.AttemptId, req.EnvironmentId, accountID, namespace); derr != nil {
+			slogger.Warn("snapshot: T3 driver Destroy failed (manifest already written)",
+				logging.KeyEnvID, req.EnvironmentId, logging.KeyError, derr)
+		}
+		s.t3.attemptEnv.Delete(req.AttemptId)
+		_, _ = s.db.Exec(ctx, `UPDATE env.environment SET status = $2 WHERE id = $1`, req.EnvironmentId, envstatus.Destroyed)
+		s.reaper.Unregister(ctx, req.EnvironmentId)
+	}
+
+	m := res.Manifest
+	return &pb.SnapshotResponse{
+		SnapshotId: res.SnapshotID,
+		StorageUri: res.ManifestURI,
+		Manifest: &pb.SnapshotManifest{
+			TfBackendUri:       m.TFBackendURI,
+			TfStateSerial:      fmt.Sprintf("%d", m.TFStateSerial),
+			TfWorkspace:        m.TFWorkspace,
+			K8SInventoryUri:    m.K8sInventoryURI,
+			CloudInventoryUri:  m.CloudInventoryURI,
+			CloudResourceCount: int32(m.CloudResourceCount),
+			SandboxAccountId:   m.SandboxAccountID,
+			CapturedAt:         m.CapturedAt.Format(time.RFC3339),
+		},
+	}, nil
 }
 
-func (s *Server) Restore(ctx context.Context, req *pb.RestoreRequest) (*pb.ProvisionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "snapshot/restore is Phase 3 scope (project mode workspaces)")
+// Restore re-provisions a T3 project workspace from a snapshot manifest:
+// re-claim the sandbox account (the original if still pooled), start a
+// fresh workspace pod, `terraform apply` from the persisted remote
+// state. Returns a ProvisionResponse just like Provision (contract:
+// `rpc Restore(RestoreRequest) returns (ProvisionResponse)`).
+func (s *Server) Restore(ctx context.Context, req *pb.RestoreRequest) (resp *pb.ProvisionResponse, err error) {
+	if s.t3 == nil || s.t3.snapshot == nil {
+		return nil, status.Error(codes.FailedPrecondition, "T3 tier is not enabled on this orchestrator (CLOUD_ACCOUNTS_MODE unset)")
+	}
+	if req.AttemptId == "" || req.SnapshotId == "" {
+		return nil, status.Error(codes.InvalidArgument, "attempt_id and snapshot_id are required")
+	}
+
+	region := s.t3.defaultRegion
+	budget := s.t3.defaultBudget
+
+	res, rerr := s.t3.snapshot.Restore(ctx, snapshotstate.RestoreInput{
+		SnapshotID:       req.SnapshotId,
+		AttemptID:        req.AttemptId,
+		TenantID:         "", // not on RestoreRequest; the reclaimer only needs it for a fallback fresh claim
+		Region:           region,
+		CloudAccountHint: req.CloudAccountHint,
+		BudgetUSD:        budget,
+	})
+	if rerr != nil {
+		return nil, status.Errorf(codes.Internal, "restore failed: %v", rerr)
+	}
+
+	// Re-register the env row + reaper + attempt->env map so the resumed
+	// environment is tracked exactly like a freshly provisioned one.
+	s.t3.attemptEnv.Set(req.AttemptId, res.EnvID)
+	if _, derr := s.db.Exec(ctx, `
+		INSERT INTO env.environment (id, attempt_id, tier, blueprint_id, status, namespace, cloud_account_id, ready_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+		ON CONFLICT (id) DO UPDATE SET attempt_id = $2, status = $5, namespace = $6, cloud_account_id = $7, ready_at = now()
+	`, res.EnvID, req.AttemptId, pb.Tier_TIER_T3_CLOUD_ACCOUNT.String(), req.BlueprintId, envstatus.Ready, res.Namespace, res.AccountID); derr != nil {
+		slogger.Warn("restore: failed to write env.environment row", logging.KeyEnvID, res.EnvID, logging.KeyError, derr)
+	}
+	if rerr := s.reaper.Register(ctx, res.EnvID, res.Namespace, s.defaultTTL); rerr != nil {
+		slogger.Warn("restore: reaper register failed", logging.KeyEnvID, res.EnvID, logging.KeyError, rerr)
+	}
+
+	s.audit.Record(context.Background(), audit.Entry{
+		EnvironmentID: res.EnvID,
+		AttemptID:     req.AttemptId,
+		Action:        audit.ActionRestore,
+		Outcome:       audit.Success,
+		Detail:        map[string]any{"snapshot_id": req.SnapshotId, "account_id": res.AccountID},
+	})
+
+	endpoints, _ := s.connectionEndpoints(req.AttemptId, res.EnvID)
+	return &pb.ProvisionResponse{
+		EnvironmentId: res.EnvID,
+		Status:        pb.EnvironmentStatus_ENVIRONMENT_STATUS_READY,
+		Endpoints:     endpoints,
+	}, nil
+}
+
+// provisionT3 is the TIER_T3_CLOUD_ACCOUNT provision path: claim a
+// sandbox account, start the STS broker, start a workspace pod on the
+// platform cluster. Called from Provision (which owns the audit/metrics
+// defer and assigned envID).
+func (s *Server) provisionT3(ctx context.Context, req *pb.ProvisionRequest, envID string) (*pb.ProvisionResponse, error) {
+	if s.t3 == nil || s.t3.driver == nil {
+		return nil, status.Error(codes.FailedPrecondition, "TIER_T3_CLOUD_ACCOUNT is not enabled on this orchestrator -- set CLOUD_ACCOUNTS_MODE=fake (local-real) or =real")
+	}
+
+	// ProvisionRequest has no dedicated region / cloud-budget fields (a
+	// contract change is a shared-PR item, PLAN.md's conflict rules), so
+	// T3 callers pass them packed into the existing network_policy
+	// string as "region=<r>;budget=<usd>". Either key may be absent;
+	// missing values fall back to the orchestrator's T3 defaults.
+	region, budget := parseT3Hints(req.NetworkPolicy, s.t3.defaultRegion, s.t3.defaultBudget)
+
+	// The broker (started inside driver.Provision) will need attempt->env
+	// to write the creds file into the right pod.
+	s.t3.attemptEnv.Set(req.AttemptId, envID)
+
+	pres, err := s.t3.driver.Provision(ctx, t3driver.ProvisionInput{
+		AttemptID: req.AttemptId,
+		TenantID:  "",
+		EnvID:     envID,
+		Region:    region,
+		BudgetUSD: budget,
+	})
+	if err != nil {
+		s.t3.attemptEnv.Delete(req.AttemptId)
+		return nil, status.Errorf(codes.Internal, "T3 provision failed: %v", err)
+	}
+
+	if _, derr := s.db.Exec(ctx, `
+		INSERT INTO env.environment (id, attempt_id, tier, blueprint_id, status, namespace, cloud_account_id, tf_workspace_dir, ready_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+		ON CONFLICT (id) DO UPDATE SET attempt_id = $2, status = $5, namespace = $6, cloud_account_id = $7, ready_at = now()
+	`, envID, req.AttemptId, pb.Tier_TIER_T3_CLOUD_ACCOUNT.String(), req.BlueprintId, envstatus.Ready, pres.Namespace, pres.AccountID, s.t3.tfWorkspaceDir); derr != nil {
+		slogger.Warn("T3 provision: failed to write env.environment row", logging.KeyEnvID, envID, logging.KeyError, derr)
+	}
+	if rerr := s.reaper.Register(ctx, envID, pres.Namespace, resolveEnvTTL(k8s.TierT1SharedContainer, req.TtlMinutes, s.defaultTTL)); rerr != nil {
+		slogger.Warn("T3 provision: reaper register failed", logging.KeyEnvID, envID, logging.KeyError, rerr)
+	}
+
+	slogger.Info("T3 environment provisioned",
+		logging.KeyEnvID, envID, logging.KeyAttemptID, req.AttemptId,
+		"account_id", pres.AccountID, "namespace", pres.Namespace)
+
+	endpoints, _ := s.connectionEndpoints(req.AttemptId, envID)
+	return &pb.ProvisionResponse{
+		EnvironmentId: envID,
+		Status:        pb.EnvironmentStatus_ENVIRONMENT_STATUS_READY,
+		Endpoints:     endpoints,
+	}, nil
 }
 
 // MintValidatorCredentials implements PLAN.md integration point #2: a
@@ -736,11 +1054,32 @@ func (s *Server) Destroy(ctx context.Context, req *pb.DestroyRequest) (*pb.Destr
 		return nil, err
 	}
 
+	// PLAN.md Phase 3: a T3 environment has a claimed sandbox account +
+	// a running STS broker behind it that the generic Destroyer knows
+	// nothing about. Route those through the T3 driver first (stop the
+	// broker, release the account via nuke+verify), then fall through to
+	// the standard Destroyer for the pod/namespace teardown +
+	// ENV_DESTROYED so the attempt-side bookkeeping is identical to
+	// every other tier.
+	var tier, cloudAccountID, namespace string
+	_ = s.db.QueryRow(ctx, `
+		SELECT tier, COALESCE(cloud_account_id, ''), namespace
+		  FROM env.environment WHERE id = $1`, req.EnvironmentId).Scan(&tier, &cloudAccountID, &namespace)
+	if tier == pb.Tier_TIER_T3_CLOUD_ACCOUNT.String() && s.t3 != nil && s.t3.driver != nil {
+		if derr := s.t3.driver.Destroy(ctx, req.AttemptId, req.EnvironmentId, cloudAccountID, namespace); derr != nil {
+			slogger.Warn("T3 driver Destroy failed (continuing with standard teardown)",
+				logging.KeyEnvID, req.EnvironmentId, logging.KeyError, derr)
+		}
+		s.t3.attemptEnv.Delete(req.AttemptId)
+	}
+
 	// Doc §4.2 / contracts/events.md rule #3: every teardown path --
 	// clean submit, idle/TTL/budget, reaper force-destroy -- funnels
 	// through the same Destroyer so ENV_DESTROYED always gets published
 	// and the bookkeeping (meter stop, idle untrack, DB status, reaper
-	// unregister) never drifts between call sites.
+	// unregister) never drifts between call sites. For a T3 env the
+	// namespace may already be gone (t3driver.Destroy deleted it above),
+	// which the Destroyer handles idempotently.
 	if err := s.destroyer.Destroy(ctx, req.EnvironmentId, req.Reason); err != nil {
 		return nil, status.Errorf(codes.Internal, "destroy failed: %v", err)
 	}

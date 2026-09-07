@@ -20,6 +20,25 @@ the same commit as any `orchestrator.proto` change — CI enforces this with
 
 ---
 
+## 2026-09-07 — Stub-freshness reconcile (no proto change)
+
+**PATCH** — `orchestrator/pkg/pb/*.pb.go` only; `orchestrator.proto` unchanged (`git diff
+contracts/orchestrator.proto` empty). The 2026-08-27 (0.7) entry said the Go stubs were
+regenerated "in the same change", but the committed `.pb.go` did not actually carry the
+`SnapshotManifest` message, `SnapshotResponse.manifest` (field 4), or
+`RestoreRequest.cloud_account_hint` (field 7) — the proto had them, the generated code did
+not (the same stale-stub class Track 3.3 in `PHASE0_1_2_PENDING_CLOSEOUT.md` reconciled for
+`health_gate_json` + the `attempt_id` fields). Ran `cd contracts && buf generate`; the stubs
+now match the proto. Needed by the Phase 3 T3 wiring (`internal/orchestrator/server.go`'s real
+`Snapshot`/`Restore` handlers reference `pb.SnapshotManifest` / `req.CloudAccountHint`).
+
+Verified: `buf lint` 0; `buf breaking` vs `origin/main` 0 (no proto delta); `buf generate` twice
+byte-identical; `cd orchestrator && go build ./... && go vet ./... && gofmt -l .` clean;
+`go test ./...` green (the 4 pre-existing `internal/fixture/*LiveIntegration` failures are
+unrelated — in-cluster installer fixtures, confirmed failing on clean `main`).
+
+---
+
 ## 2026-08-27 — Phase 3 (0.7): Snapshot/Restore payload shape for T3 IaC-state
 
 **MINOR** — `orchestrator.proto`. Purely additive: one new message, two new fields, doc

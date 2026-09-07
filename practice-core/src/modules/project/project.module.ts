@@ -16,6 +16,10 @@ import { FakeProjectOrchestrator } from './fake-project-orchestrator';
 import { GrpcProjectOrchestrator } from './grpc-project-orchestrator';
 import { VIVA_MODEL } from './viva-model.port';
 import { RealVivaModel, FakeVivaModel } from './viva-model.port';
+import {
+  LLM_TOOL_CALLER,
+  createVivaLlmToolCaller,
+} from '../evaluation/llm-tool-call.port';
 
 /**
  * Phase 3 (PLAN_PHASE3_PROJECTS.md — Track B). Project mode: the
@@ -33,8 +37,11 @@ import { RealVivaModel, FakeVivaModel } from './viva-model.port';
  * GrpcProjectOrchestrator (a real adapter over
  * contracts/orchestrator.proto Provision(T3)/Snapshot/Restore/Destroy)
  * when PROJECT_ORCHESTRATOR_GRPC=on — Stage 3.4's "swap the fake for the
- * real driver". VIVA_MODEL: FakeVivaModel unless ANTHROPIC_API_KEY is
- * set (same rule as AI_GRADER).
+ * real driver". VIVA_MODEL: FakeVivaModel unless an LLM provider key
+ * (GROQ_API_KEY or ANTHROPIC_API_KEY) is set (same rule as AI_GRADER);
+ * LLM_TOOL_CALLER is registered here as a second, stateless instance
+ * (same rationale as AttemptRepository above) rather than exported from
+ * EvaluationModule, keeping the module seam unchanged.
  */
 @Module({
   imports: [DatabaseModule, EventStoreModule, EvaluationModule],
@@ -60,12 +67,22 @@ import { RealVivaModel, FakeVivaModel } from './viva-model.port';
       inject: [ConfigService, GrpcProjectOrchestrator],
     },
     {
+      provide: LLM_TOOL_CALLER,
+      useFactory: (config: ConfigService) => createVivaLlmToolCaller(config),
+      inject: [ConfigService],
+    },
+    {
       provide: VIVA_MODEL,
       useFactory: (
         config: ConfigService,
         real: RealVivaModel,
         fake: FakeVivaModel,
-      ) => (config.get<string>('ANTHROPIC_API_KEY') ? real : fake),
+      ) => {
+        const hasProvider =
+          !!config.get<string>('ANTHROPIC_API_KEY') ||
+          !!config.get<string>('GROQ_API_KEY');
+        return hasProvider ? real : fake;
+      },
       inject: [ConfigService, RealVivaModel, FakeVivaModel],
     },
   ],

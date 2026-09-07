@@ -50,6 +50,12 @@ const (
 	ActionCaptureBaseline Action = "CAPTURE_BASELINE"
 	ActionCheckRegression Action = "CHECK_REGRESSION"
 	ActionExecValidator   Action = "EXEC_VALIDATOR"
+	// PLAN.md Phase 3: T3 project-workspace suspend/resume. Snapshot
+	// captures IaC state + tears the compute down; Restore re-claims a
+	// sandbox account and re-provisions -- both security-relevant (they
+	// move a learner's cloud account in and out of active use).
+	ActionSnapshot Action = "SNAPSHOT"
+	ActionRestore  Action = "RESTORE"
 )
 
 // Logger writes audit entries to env.audit_log. A thin wrapper over

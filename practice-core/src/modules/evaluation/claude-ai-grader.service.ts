@@ -1,28 +1,36 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import Anthropic from '@anthropic-ai/sdk';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type {
   AiGrader,
   GradingFacts,
   GradingResult,
   CriterionGrade,
 } from './ai-grader.interface';
+import {
+  LLM_TOOL_CALLER,
+  type LlmToolCaller,
+  type LlmToolSchema,
+} from './llm-tool-call.port';
 import type { Rubric, RubricCriterion } from './rubric.repository';
 
 /**
- * Real LLM-backed grader (Claude via the Messages API), replacing
- * FakeAiGrader now that a provider key exists -- see this project's
- * remediation tracker for why this was stubbed until now. Implements
- * doc §6.5's four grading rules directly:
+ * Real LLM-backed grader, replacing FakeAiGrader whenever a provider key
+ * exists -- see this project's remediation tracker for why this was
+ * stubbed until now. The actual vendor call is delegated to an injected
+ * LlmToolCaller (Anthropic in production, Groq for free-tier testing --
+ * LLM_PROVIDER / GROQ_API_KEY / ANTHROPIC_API_KEY select which), so this
+ * class only owns prompt construction, multi-sample reconciliation, and
+ * value-level validation. Implements doc §6.5's four grading rules
+ * directly:
  *
  *  - rule 31 (rubric-anchored): exemplars from the rubric YAML go in
  *    the prompt verbatim, doc's own framing: "the difference between
  *    usable and useless AI grading."
- *  - rule 32 (structured output only): uses Anthropic's tool-use
- *    forced-tool-choice mechanism to get schema-validated JSON back
- *    directly, rather than asking the model to emit JSON in prose and
- *    parsing it -- eliminates an entire class of "the model wrapped it
- *    in markdown fences" / "the model added a preamble" parse failures.
+ *  - rule 32 (structured output only): forces a single tool call and
+ *    reads its schema-shaped JSON arguments, rather than asking the
+ *    model to emit JSON in prose and parsing it -- eliminates an entire
+ *    class of "the model wrapped it in markdown fences" / "the model
+ *    added a preamble" parse failures. Both provider backends express
+ *    the same forced-single-tool contract.
  *  - rule 33 (multi-sample + agreement): calls the model N times
  *    (SAMPLE_COUNT) per criterion set and flags the result provisional
  *    if any criterion's level disagrees across samples -- doc's own
@@ -55,65 +63,65 @@ import type { Rubric, RubricCriterion } from './rubric.repository';
 @Injectable()
 export class ClaudeAiGrader implements AiGrader {
   private readonly logger = new Logger(ClaudeAiGrader.name);
-  private readonly client: Anthropic | null;
-  private readonly model: string;
   // SAMPLE_COUNT: how many independent gradings grade() runs per
   // artifact, reconciled for a self-consistency signal. Default 3.
   // Cost: each sample is a full API call, so this is the biggest cost
   // lever (docs/ai-grader-cost.md). Drop to 1 via
-  // ANTHROPIC_GRADER_SAMPLE_COUNT=1 AFTER the rubric has passed
-  // calibration (rub-calibration.md records a passing run) and its
-  // grades are stable -- the disagreement flag is most valuable while a
-  // rubric is still being tuned. Clamped to [1, 5].
+  // GRADER_SAMPLE_COUNT=1 (ANTHROPIC_GRADER_SAMPLE_COUNT still honoured)
+  // AFTER the rubric has passed calibration (rub-calibration.md records a
+  // passing run) and its grades are stable -- the disagreement flag is
+  // most valuable while a rubric is still being tuned. Clamped to [1, 5].
   private readonly sampleCount: number;
-  // grade() makes sampleCount calls sequentially -- the SDK default
-  // (10 minutes) is far too generous for a single grading call and
-  // would let one hung request stall an entire evaluate() pipeline for
-  // up to 30 minutes across all 3 samples. 45s is generous for a
-  // single-turn tool-use completion but bounds total worst-case grade()
-  // latency to a few minutes even with retries.
-  private static readonly REQUEST_TIMEOUT_MS = 45_000;
-  // SDK-native retry (distinguishes retryable 429/5xx/network from
-  // non-retryable 4xx, exponential backoff) rather than a hand-rolled
-  // loop -- covers transient provider failures without changing the
-  // existing "failure logged and swallowed upstream, never becomes a
-  // false success" behavior (evaluation.service.ts's catch around
-  // gradeArtifact is unchanged; this only reduces how often it fires).
-  private static readonly MAX_RETRIES = 2;
 
-  // Deliberately does NOT throw when ANTHROPIC_API_KEY is absent --
-  // NestJS instantiates every provider listed in a module's `providers`
-  // array eagerly at bootstrap regardless of whether the AI_GRADER
-  // factory ends up selecting this one or FakeAiGrader (see
-  // evaluation.module.ts's useFactory), so a constructor-time throw here
-  // would break app startup even in environments that only use
-  // FakeAiGrader. client stays null in that case; grade() throws instead,
-  // at the point this class is actually asked to do real work -- which
-  // only happens if something bypasses the module's own factory guard
-  // (a bug worth a clear error, not a silent no-op).
-  constructor(config: ConfigService) {
-    const apiKey = config.get<string>('ANTHROPIC_API_KEY');
-    this.client = apiKey
-      ? new Anthropic({
-          apiKey,
-          timeout: ClaudeAiGrader.REQUEST_TIMEOUT_MS,
-          maxRetries: ClaudeAiGrader.MAX_RETRIES,
-        })
-      : null;
-    this.model =
-      config.get<string>('ANTHROPIC_GRADER_MODEL') ?? 'claude-sonnet-4-5';
-    const rawSamples = Number(
-      config.get<string>('ANTHROPIC_GRADER_SAMPLE_COUNT') ?? '3',
+  // Deliberately does NOT throw when no provider is configured -- NestJS
+  // instantiates every provider listed in a module's `providers` array
+  // eagerly at bootstrap regardless of whether the AI_GRADER factory
+  // ends up selecting this one or FakeAiGrader (see evaluation.module.ts's
+  // useFactory), so a constructor-time throw here would break app startup
+  // even in environments that only use FakeAiGrader. llm stays null in
+  // that case; grade() throws instead, at the point this class is
+  // actually asked to do real work -- which only happens if something
+  // bypasses the module's own factory guard (a bug worth a clear error,
+  // not a silent no-op).
+  constructor(
+    @Inject(LLM_TOOL_CALLER)
+    private readonly llm: LlmToolCaller | null,
+  ) {
+    // Read the sample count from the environment in the body, NOT as a
+    // defaulted constructor param: NestJS DI resolves EVERY constructor
+    // parameter, and a bare `sampleCount = number` param with no
+    // @Inject / injectable type makes Nest fail with "can't resolve
+    // dependencies of ClaudeAiGrader (…, ?)". Tests that need a specific
+    // count set the env var or use `withSampleCount()`.
+    const raw = Number(
+      process.env.GRADER_SAMPLE_COUNT ??
+        process.env.ANTHROPIC_GRADER_SAMPLE_COUNT ??
+        '3',
     );
-    this.sampleCount = Number.isFinite(rawSamples)
-      ? Math.min(5, Math.max(1, Math.round(rawSamples)))
+    this.sampleCount = Number.isFinite(raw)
+      ? Math.min(5, Math.max(1, Math.round(raw)))
       : 3;
   }
 
+  /**
+   * Test-only override of the multi-sample count (clamped to [1,5]).
+   * Not a constructor param -- see the constructor comment for why. Runs
+   * before grade() is called; returns `this` for chaining.
+   */
+  withSampleCount(n: number): this {
+    if (Number.isFinite(n)) {
+      (this as unknown as { sampleCount: number }).sampleCount = Math.min(
+        5,
+        Math.max(1, Math.round(n)),
+      );
+    }
+    return this;
+  }
+
   async grade(rubric: Rubric, facts: GradingFacts): Promise<GradingResult> {
-    if (!this.client) {
+    if (!this.llm) {
       throw new Error(
-        'ClaudeAiGrader.grade() called without ANTHROPIC_API_KEY configured -- evaluation.module.ts should have selected FakeAiGrader instead; this indicates a DI wiring bug',
+        'ClaudeAiGrader.grade() called without an LLM provider configured (LLM_PROVIDER / GROQ_API_KEY / ANTHROPIC_API_KEY) -- evaluation.module.ts should have selected FakeAiGrader instead; this indicates a DI wiring bug',
       );
     }
     const samples: CriterionGrade[][] = [];
@@ -138,55 +146,35 @@ export class ClaudeAiGrader implements AiGrader {
     facts: GradingFacts,
   ): Promise<CriterionGrade[]> {
     // Non-null assertion is safe here: gradeOnce is only ever called
-    // from grade(), which already guards on this.client being non-null
+    // from grade(), which already guards on this.llm being non-null
     // before calling it (TypeScript doesn't narrow the field across the
     // method boundary, so this documents that invariant explicitly
     // rather than re-checking it).
     // Prompt caching (cost): the system prompt AND the grading tool
-    // (its input_schema is derived only from the rubric) are byte-
-    // identical across all SAMPLE_COUNT calls for one artifact and
-    // across every artifact graded against the same rubric. Marking
-    // both with cache_control turns them into ~90%-discounted cache
-    // reads after the first call in a 5-minute window -- roughly a 30%
-    // cut on per-grade input cost at no quality change (the learner
-    // artifact + ground-truth facts, which DO vary per call, stay in
-    // the uncached user message). See docs/ai-grader-cost.md.
-    const message = await this.client!.messages.create({
-      model: this.model,
-      max_tokens: 4096,
-      system: [
-        {
-          type: 'text',
-          text: this.buildSystemPrompt(rubric),
-          cache_control: { type: 'ephemeral' },
-        },
-      ],
-      messages: [
-        { role: 'user', content: this.buildUserPrompt(rubric, facts) },
-      ],
-      tools: [
-        {
-          ...this.buildGradingTool(rubric),
-          cache_control: { type: 'ephemeral' },
-        },
-      ],
-      tool_choice: { type: 'tool', name: 'submit_grades' },
+    // (its schema is derived only from the rubric) are byte-identical
+    // across all SAMPLE_COUNT calls for one artifact and across every
+    // artifact graded against the same rubric, so both are passed as
+    // `cacheable` -- on the Anthropic backend that turns them into
+    // ~90%-discounted cache reads after the first call in a 5-minute
+    // window (roughly a 30% cut on per-grade input cost at no quality
+    // change; the learner artifact + ground-truth facts, which DO vary
+    // per call, stay in the uncached user message). The Groq backend
+    // has no prompt cache and ignores the flag. See docs/ai-grader-cost.md.
+    const input = await this.llm!.callTool({
+      system: this.buildSystemPrompt(rubric),
+      user: this.buildUserPrompt(rubric, facts),
+      tool: this.buildGradingTool(rubric),
+      maxTokens: 4096,
+      cacheable: true,
     });
 
-    const toolUse = message.content.find((block) => block.type === 'tool_use');
-    if (!toolUse || toolUse.type !== 'tool_use') {
-      throw new Error(
-        `ClaudeAiGrader: expected a tool_use block for rubric=${rubric.id}, got: ${JSON.stringify(message.content)}`,
-      );
-    }
-
-    return this.parseAndValidate(rubric, toolUse.input);
+    return this.parseAndValidate(rubric, input);
   }
 
-  // Doc rule 32: structured output only, schema-validated. The tool's
-  // input_schema IS the schema Anthropic enforces server-side (forced
-  // tool_choice means the model cannot respond with plain text instead),
-  // so malformed shape is already impossible by construction; this
+  // Doc rule 32: structured output only, schema-validated. The forced
+  // single tool means the model cannot respond with plain text instead,
+  // and the provider validates arguments against the schema, so a
+  // malformed top-level shape is already unlikely by construction; this
   // function's remaining job is validating VALUES within that shape
   // (level actually in range, criterion keys actually match the rubric)
   // -- constraints JSON Schema's own type system can't express.
@@ -343,14 +331,15 @@ export class ClaudeAiGrader implements AiGrader {
 
   // Doc rule 32's structured-output contract (criterion, level,
   // confidence, evidence_quotes[], justification, flags[]) mapped
-  // directly onto a tool's input_schema -- forcing tool_choice on this
-  // one tool makes malformed/free-text output impossible rather than
-  // something to catch after the fact.
-  private buildGradingTool(rubric: Rubric): Anthropic.Tool {
+  // directly onto the forced tool's schema -- forcing this one tool
+  // makes malformed/free-text output impossible rather than something to
+  // catch after the fact. Both provider backends accept this JSON-Schema
+  // shape (Anthropic input_schema / OpenAI-compatible function params).
+  private buildGradingTool(rubric: Rubric): LlmToolSchema {
     return {
       name: 'submit_grades',
       description: 'Submit a grade for every criterion in the rubric.',
-      input_schema: {
+      inputSchema: {
         type: 'object',
         properties: {
           grades: {

@@ -1,28 +1,35 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { BudgetLedger } from './budget-ledger';
-import { FakeLlmProvider } from './fake-provider';
 import { LlmGatewayService } from './llm-gateway.service';
 import { PromptCache } from './prompt-cache';
+import { buildLlmProviders } from './providers';
 import type { LlmProvider } from './types';
 
 /**
  * PLAN.md G1 / doc §7.6. The gateway is the single chokepoint for every
- * model call. Providers are assembled by a factory: a real deployment
- * lists (anthropic, openai, ...) health-checked in priority order; here
- * we ship the FakeLlmProvider so every downstream feature (Mentor, and
- * later grader/authoring routed through the gateway) works offline. A
- * real provider list is a drop-in behind the LlmProvider interface.
+ * plain-text model call (Mentor replies, the authoring assistant's
+ * draft(), hint RAG, summarisation).
+ *
+ * Providers are assembled by buildLlmProviders (providers.ts):
+ *   - development -> GroqProvider first (Groq free-tier, fast iteration)
+ *   - production  -> AnthropicProvider first
+ *   - the other real provider is appended as a cross-provider failover
+ *     target when its key is present
+ *   - FakeLlmProvider is used ONLY when NO real key is configured at all
+ *     (offline local dev / CI). With a key present the fake never enters
+ *     the list -- "no fake responses when an API key exists".
+ *
+ * Retry + per-request timeout live in each SDK adapter; the gateway
+ * layers routing, redaction, prompt cache, budget circuit-breaker, and
+ * cross-provider failover on top (LlmGatewayService.call).
  */
 @Module({
   providers: [
     {
       provide: 'LLM_PROVIDERS',
-      useFactory: (_config: ConfigService): LlmProvider[] => {
-        // TODO(real deployment): build from ANTHROPIC_API_KEY / OPENAI_API_KEY,
-        // ordered by priority, each wrapped in an LlmProvider adapter.
-        return [new FakeLlmProvider()];
-      },
+      useFactory: (config: ConfigService): LlmProvider[] =>
+        buildLlmProviders(config),
       inject: [ConfigService],
     },
     { provide: BudgetLedger, useFactory: () => new BudgetLedger() },

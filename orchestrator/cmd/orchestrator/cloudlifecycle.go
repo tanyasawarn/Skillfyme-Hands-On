@@ -49,25 +49,46 @@ func setupCloudLifecycle(
 	nc *nats.Conn,
 	terminateT3 func(ctx context.Context, attemptID string) error,
 ) *CloudLifecycle {
-	if !cfg.CloudAccountsEnabled {
-		log.Println("[main] Phase 3 cloud-account lifecycle DISABLED (CLOUD_ACCOUNTS_ENABLED not set) — T3 cloud sandboxes unavailable")
+	switch cfg.CloudAccountsMode {
+	case "disabled", "":
+		log.Println("[main] Phase 3 cloud-account lifecycle DISABLED (CLOUD_ACCOUNTS_MODE unset) — T3 cloud sandboxes unavailable")
 		return &CloudLifecycle{Enabled: false}
+	case "fake":
+		log.Println("[main] Phase 3 cloud-account lifecycle in LOCAL-REAL mode (CLOUD_ACCOUNTS_MODE=fake): real k3s workspace pods + real MinIO manifests + real in-pod terraform, cloudaws.FakeClient for STS/nuke/Budgets/CostExplorer — no AWS account needed")
+		return buildCloudLifecycle(ctx, cfg, db, rdb, nc, cloudaws.NewFakeClient(), terminateT3)
+	case "real":
+		real, err := cloudaws.NewRealClient(ctx, cloudaws.RealClientConfig{
+			Region:             cfg.AWSRegion,
+			PlatformAccountID:  cfg.PlatformAccountID,
+			BaselineModuleDir:  getenvOr("BASELINE_MODULE_DIR", "/opt/practice/account-baseline"),
+			NukeConfigTemplate: getenvOr("CLOUD_NUKE_CONFIG_TEMPLATE", "/opt/practice/nuke/aws-nuke.yaml.tmpl"),
+			TFStateBucket:      getenvOr("TF_STATE_BUCKET", ""),
+			CURBucket:          getenvOr("CUR_BUCKET", ""),
+		})
+		if err != nil {
+			log.Fatalf("[main] CLOUD_ACCOUNTS_MODE=real but AWS client init failed: %v", err)
+		}
+		log.Printf("[main] Phase 3 cloud-account lifecycle ENABLED, real AWS (region=%s, platform-account=%s)", cfg.AWSRegion, cfg.PlatformAccountID)
+		return buildCloudLifecycle(ctx, cfg, db, rdb, nc, real, terminateT3)
+	default:
+		log.Fatalf("[main] unknown CLOUD_ACCOUNTS_MODE=%q (want: disabled | fake | real)", cfg.CloudAccountsMode)
+		return nil
 	}
+}
 
-	var client cloudaws.Client
-	real, err := cloudaws.NewRealClient(ctx, cloudaws.RealClientConfig{
-		Region:             cfg.AWSRegion,
-		PlatformAccountID:  cfg.PlatformAccountID,
-		BaselineModuleDir:  getenvOr("BASELINE_MODULE_DIR", "/opt/practice/account-baseline"),
-		NukeConfigTemplate: getenvOr("CLOUD_NUKE_CONFIG_TEMPLATE", "/opt/practice/nuke/aws-nuke.yaml.tmpl"),
-		TFStateBucket:      getenvOr("TF_STATE_BUCKET", ""),
-		CURBucket:          getenvOr("CUR_BUCKET", ""),
-	})
-	if err != nil {
-		log.Fatalf("[main] CLOUD_ACCOUNTS_ENABLED=true but AWS client init failed: %v", err)
-	}
-	client = real
-	log.Printf("[main] Phase 3 cloud-account lifecycle ENABLED (region=%s, platform-account=%s)", cfg.AWSRegion, cfg.PlatformAccountID)
+// buildCloudLifecycle wires the Stage 2 stack over a given cloudaws.Client
+// (real or fake). Factored out of setupCloudLifecycle so the fake
+// (local-real) and real modes share identical wiring — only the AWS
+// boundary client differs.
+func buildCloudLifecycle(
+	ctx context.Context,
+	cfg config.Config,
+	db *pgxpool.Pool,
+	rdb *redis.Client,
+	nc *nats.Conn,
+	client cloudaws.Client,
+	terminateT3 func(ctx context.Context, attemptID string) error,
+) *CloudLifecycle {
 
 	events := &natsAccountEvents{nc: nc}
 	pool := accountpool.NewManager(db, rdb, client, events)

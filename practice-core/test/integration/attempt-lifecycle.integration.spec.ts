@@ -949,10 +949,12 @@ describe('AttemptService (integration, real Postgres) — doc §4.1 state machin
     const cached = await attemptRepo.findById(attempt.id);
     expect(cached?.status).toBe('CACHED');
     expect(cached?.environment_id).toBeNull();
-    // Snapshot stub (§5): a placeholder id/timestamp is recorded so the
-    // data model is ready for real capture, even though no real
-    // workspace-state persistence exists yet (see cache()'s doc comment).
-    expect(cached?.snapshot_id).toMatch(/^stub-/);
+    // T1/T2 do NOT snapshot the workspace (re-provision from the fixture
+    // on resume, per the blueprint doc) -- so snapshot_id is null and the
+    // SNAPSHOT_TAKEN event is honest about capturing nothing, rather than
+    // fabricating a placeholder id. T3 project workspaces snapshot via
+    // the orchestrator's real Snapshot/Restore RPCs.
+    expect(cached?.snapshot_id).toBeNull();
     expect(cached?.snapshot_taken_at).not.toBeNull();
 
     const snapshotEvent = await db
@@ -961,7 +963,14 @@ describe('AttemptService (integration, real Postgres) — doc §4.1 state machin
       .where('attempt_id', '=', attempt.id)
       .where('type', '=', 'SNAPSHOT_TAKEN')
       .executeTakeFirstOrThrow();
-    expect((snapshotEvent.payload as { stub: boolean }).stub).toBe(true);
+    const snapPayload = snapshotEvent.payload as {
+      snapshot_id: string | null;
+      captured: boolean;
+      reason: string;
+    };
+    expect(snapPayload.snapshot_id).toBeNull();
+    expect(snapPayload.captured).toBe(false);
+    expect(snapPayload.reason).toBe('tier_does_not_snapshot');
 
     // Idempotent: calling cache() again on an already-CACHED attempt is a no-op.
     await expect(attemptService.cache(attempt.id)).resolves.not.toThrow();

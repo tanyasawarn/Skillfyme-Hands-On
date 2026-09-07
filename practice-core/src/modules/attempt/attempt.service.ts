@@ -550,15 +550,18 @@ export class AttemptService {
    * in history), not a cost-control one -- SUSPENDED already achieved
    * zero backend cost (§4).
    *
-   * Snapshot stub (§5, "persisted user progress snapshot"): no real
-   * workspace-state capture exists anywhere in this codebase yet (the Go
-   * orchestrator's Snapshot/Restore RPCs are Unimplemented stubs --
-   * confirmed before writing this). This fires SNAPSHOT_TAKEN and sets
-   * snapshot_id/snapshot_taken_at so the event log and data model are
-   * shaped correctly for when real capture is built, but snapshot_id is
-   * always a placeholder value today, not a real artifact reference --
-   * reactivate() below still provisions a fresh environment, not a
-   * restored one.
+   * Workspace snapshot (§5, "persisted user progress snapshot"): the
+   * guided-lab / production-sim tiers (T1 / T2) deliberately DO NOT
+   * snapshot their workspace -- the blueprint doc's own model is
+   * "re-provision from the fixture on resume" for these short-lived
+   * activities (T3 project workspaces are the ones that snapshot, via
+   * the orchestrator's real Snapshot/Restore RPCs and the project
+   * module's ProjectOrchestratorPort). So this path records an honest
+   * SNAPSHOT_TAKEN with snapshot_id: null and captured: false -- the
+   * data-model slot exists for T3, but no artifact was captured here --
+   * and does NOT fabricate a placeholder id. reactivate() re-provisions
+   * a fresh environment; task/hint progress in attempt_task_state /
+   * attempt_events is untouched regardless.
    */
   async cache(attemptId: string): Promise<void> {
     const attempt = await this.attempts.findById(attemptId);
@@ -567,17 +570,17 @@ export class AttemptService {
       return; // only the second stage of suspended -> cached; raced or already elsewhere
     }
 
-    const snapshotId = `stub-${attemptId}-${Date.now()}`;
     await appendTypedEvent(this.events, {
       attemptId,
       actor: 'SYSTEM',
       type: 'SNAPSHOT_TAKEN',
       payload: {
-        snapshot_id: snapshotId,
-        // Explicit, not just absent-field: makes it unambiguous to
-        // anything reading the event log that this is a placeholder,
-        // not a dropped/failed real capture.
-        stub: true,
+        snapshot_id: null,
+        // T1/T2 do not capture a workspace snapshot (re-provision on
+        // resume). Not a dropped/failed capture -- there was nothing to
+        // capture for this tier by design.
+        captured: false,
+        reason: 'tier_does_not_snapshot',
       },
     });
     await appendTypedEvent(this.events, {
@@ -588,7 +591,7 @@ export class AttemptService {
     });
     await this.attempts.transition(attemptId, attempt.version, {
       status: 'CACHED',
-      snapshotId,
+      snapshotId: null,
       snapshotTakenAt: new Date(),
     });
     console.log(

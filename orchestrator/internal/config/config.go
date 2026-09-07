@@ -76,7 +76,25 @@ type Config struct {
 	// CLOUD_ACCOUNTS_ENABLED=true + the AWS_* / PLATFORM_* vars switches
 	// every Stage 2 component to the real AWS path with no code change.
 	CloudAccountsEnabled bool
-	AWSRegion            string
+	// CloudAccountsMode selects HOW T3 is wired:
+	//   "disabled" (default) -- no T3 at all (same as the old
+	//                CLOUD_ACCOUNTS_ENABLED unset).
+	//   "fake"     -- LOCAL-REAL: real k3s workspace pod + real MinIO
+	//                manifests + real in-pod terraform/kubectl exec, with
+	//                cloudaws.FakeClient standing in for STS / aws-nuke /
+	//                Budgets / Cost Explorer. No AWS account needed; runs
+	//                entirely on docker-compose. This is what PLAN.md
+	//                Phase 3 "T3 driver + Snapshot/Restore" needs to be
+	//                exercised end-to-end locally.
+	//   "real"     -- production: cloudaws.RealClient, needs a Platform
+	//                AWS Organizations account + the AWS_*/PLATFORM_* vars.
+	// CLOUD_ACCOUNTS_ENABLED=true is kept as an alias for "real".
+	CloudAccountsMode string
+	// T3EditorImage is the workspace-pod container image for a T3 env
+	// (OpenVSCode in prod; a terraform+aws-cli+bash image in local-real
+	// dev). Defaults to the linux-tools image + terraform layer.
+	T3EditorImage string
+	AWSRegion     string
 	// PlatformAccountID is the Platform (payer-side) account that assumes
 	// PlatformNukeRole in each sandbox and hosts the OIDC IdP.
 	PlatformAccountID string
@@ -127,7 +145,7 @@ type Config struct {
 // reads what's already in the process environment by the time Load()
 // runs, same ordering as before.
 func Load() Config {
-	return Config{
+	c := Config{
 		GRPCPort:                getEnv("ORCHESTRATOR_GRPC_PORT", "50051"),
 		WSPort:                  getEnv("ORCHESTRATOR_WS_PORT", "8081"),
 		MetricsPort:             getEnv("ORCHESTRATOR_METRICS_PORT", "9090"),
@@ -178,6 +196,8 @@ func Load() Config {
 
 		// Phase 3 T3 cloud account lifecycle (Stage 2.x). Opt-in.
 		CloudAccountsEnabled:      getEnvBool("CLOUD_ACCOUNTS_ENABLED", false),
+		CloudAccountsMode:         getEnv("CLOUD_ACCOUNTS_MODE", ""),
+		T3EditorImage:             getEnv("T3_EDITOR_IMAGE", "registry:5000/practiceengine/t3-tools:v1"),
 		AWSRegion:                 getEnv("AWS_REGION", ""),
 		PlatformAccountID:         getEnv("PLATFORM_ACCOUNT_ID", ""),
 		PlatformIdPURL:            getEnv("PLATFORM_IDP_URL", ""),
@@ -208,7 +228,30 @@ func Load() Config {
 		TLSKeyFile:  getEnv("ORCHESTRATOR_TLS_KEY", ""),
 		TLSCAFile:   getEnv("ORCHESTRATOR_TLS_CA", ""),
 	}
+
+	// Normalise the T3 mode. CLOUD_ACCOUNTS_ENABLED=true is the legacy
+	// alias for "real"; an explicit CLOUD_ACCOUNTS_MODE wins.
+	if c.CloudAccountsMode == "" {
+		if c.CloudAccountsEnabled {
+			c.CloudAccountsMode = "real"
+		} else {
+			c.CloudAccountsMode = "disabled"
+		}
+	}
+	// Keep the bool in sync so the existing setupCloudLifecycle "real"
+	// path (which checks CloudAccountsEnabled) still fires for mode=real.
+	c.CloudAccountsEnabled = c.CloudAccountsMode == "real"
+
+	return c
 }
+
+// T3Enabled reports whether any T3 wiring should be built (fake or real).
+func (c Config) T3Enabled() bool {
+	return c.CloudAccountsMode == "fake" || c.CloudAccountsMode == "real"
+}
+
+// T3Fake reports the local-real mode (fake AWS, real k3s + MinIO).
+func (c Config) T3Fake() bool { return c.CloudAccountsMode == "fake" }
 
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {

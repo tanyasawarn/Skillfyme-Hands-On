@@ -1,0 +1,212 @@
+id: proj.platform.iac-starter
+version: 1
+mode: PROJECT
+status: DRAFT
+
+meta:
+  title: "Project: Ship a small IaC-managed service"
+  summary: >
+    A five-milestone project. Design the architecture, stand the
+    infrastructure up with Terraform, implement the service, harden it,
+    and defend the design in a viva. Runs on a T3 cloud-account sandbox
+    (local-real: a k3s workspace pod + a MinIO-backed Terraform state
+    backend + a fake AWS control plane).
+  difficulty_level: L4
+  estimated_minutes: 480
+  locale: en
+  authors: [content-team]
+  tags: [project, terraform, iac, architecture, viva]
+
+curriculum:
+  primary_topic: topic.devops.terraform-basics
+  courses: [course.devops-with-ai]
+
+skills:
+  - skill: terraform.basics
+    weight: 0.6
+    primary: true
+    bloom: create
+  - skill: k8s.deployments
+    weight: 0.4
+    primary: false
+    bloom: apply
+
+prerequisites:
+  hard: [terraform.basics]
+  soft: []
+
+objectives:
+  - Produce an architecture design doc that survives a constrained review
+  - Stand up remote-state Terraform infrastructure with no drift
+  - Implement and harden the service against a static-analysis bar
+  - Defend the design choices under questioning
+
+environment:
+  tier: CLOUD_ACCOUNT
+  blueprint: bp.project.default
+  resources:
+    cpu: "2"
+    memory: 2Gi
+    disk: 5Gi
+  ttl_minutes: 240
+  idle_timeout_minutes: 30
+  cost_budget_usd: 5.0
+  cloud:
+    regions: [us-east-1]
+    sku_exceptions: []
+
+milestones:
+  - key: design
+    title: Architecture design
+    gate: RUBRIC_MIN_LEVEL
+    blocking: true
+    environment_required: false
+    task_keys: [m-design-doc]
+    rubric: rub.architecture.v3
+    min_level: 3
+  - key: infra
+    title: Infrastructure up (remote state, no drift)
+    gate: ALL_VALIDATORS_PASS
+    blocking: true
+    environment_required: true
+    task_keys: [m-infra-state]
+  - key: implementation
+    title: Service implemented
+    gate: ALL_VALIDATORS_PASS
+    blocking: true
+    environment_required: true
+    task_keys: [m-impl-workspace]
+  - key: hardening
+    title: Hardening pass
+    gate: ALL_VALIDATORS_PASS
+    blocking: false
+    environment_required: true
+    task_keys: [m-harden-scan]
+  - key: final
+    title: Acceptance
+    gate: ALL_VALIDATORS_PASS
+    blocking: true
+    environment_required: true
+    task_keys: [m-final-accept]
+
+defence:
+  rubric: rub.reasoning.v1
+  num_questions: 6
+  human_review: CERTIFICATION_ONLY
+
+surfaces: [terminal, editor]
+
+tasks:
+  - key: m-design-doc
+    title: Write the architecture design doc
+    required: true
+    instructions_md: |
+      In `/workspace/DESIGN.md`, document the architecture: the components,
+      the trust boundaries, where state lives, and the two biggest risks
+      with mitigations. Keep it to one page.
+    validators:
+      - id: v.design-doc-exists
+        type: FILE_EXISTS
+        run: "/workspace/DESIGN.md"
+        expect:
+          exists: true
+        weight: 0.5
+        on_fail: "/workspace/DESIGN.md not found — write the design doc first."
+      - id: v.design-doc-has-risks
+        type: FILE_CONTENT
+        run: "/workspace/DESIGN.md"
+        expect:
+          contains: "risk"
+        weight: 0.5
+        on_fail: "The design doc must call out risks and mitigations."
+    telemetry_signals: [time_to_first_success]
+
+  - key: m-infra-state
+    title: Terraform infrastructure with remote state, no drift
+    required: true
+    instructions_md: |
+      In `/workspace`, write Terraform that provisions the project's
+      infrastructure. Use a remote backend (not `local`). `terraform
+      apply`, then confirm `terraform plan` reports no changes.
+    validators:
+      - id: v.iac-state
+        type: IAC_STATE
+        expect:
+          ok: true
+        weight: 1.0
+        on_fail: "Terraform state check failed — either the backend is still `local`, or `terraform plan` shows drift."
+        config:
+          iac_state:
+            working_dir: "."
+            no_drift: true
+            require_remote_backend: true
+            forbid_secrets_in_state: true
+    telemetry_signals: [command_count]
+
+  - key: m-impl-workspace
+    title: Implement the service
+    required: true
+    instructions_md: |
+      Implement the service in `/workspace/src`. A `/workspace/RUN.md`
+      must document how to start it.
+    validators:
+      - id: v.src-present
+        type: SHELL_ASSERT
+        run: "test -d /workspace/src && test -f /workspace/RUN.md && echo ok"
+        expect:
+          stdout_contains: "ok"
+        weight: 1.0
+        on_fail: "/workspace/src or /workspace/RUN.md is missing."
+    telemetry_signals: [command_count]
+
+  - key: m-harden-scan
+    title: Pass the static-analysis bar
+    required: true
+    instructions_md: |
+      Run `tfsec` against `/workspace` and resolve findings down to at
+      most LOW severity.
+    validators:
+      - id: v.tfsec
+        type: STATIC_ANALYSIS
+        expect:
+          ok: true
+        weight: 1.0
+        on_fail: "tfsec found MEDIUM+ severity issues — harden the config."
+        config:
+          static_analysis:
+            tool: tfsec
+            target: "."
+            max_severity_allowed: LOW
+    telemetry_signals: [command_count]
+
+  - key: m-final-accept
+    title: Acceptance check
+    required: true
+    instructions_md: |
+      Everything ties together: infra applied, service documented, a
+      `/workspace/ACCEPTANCE.md` recording how you verified it end to end.
+    validators:
+      - id: v.acceptance-note
+        type: FILE_EXISTS
+        run: "/workspace/ACCEPTANCE.md"
+        expect:
+          exists: true
+        weight: 1.0
+        on_fail: "/workspace/ACCEPTANCE.md not found."
+    telemetry_signals: [time_to_first_success]
+
+completion:
+  rule: ALL_REQUIRED_TASKS_PASS
+  min_score: 0.70
+
+scoring:
+  profile: sp.project.default
+
+reference_solution:
+  repo_path: solutions/proj.platform.iac-starter/
+  visibility: AFTER_PASS_OR_EXHAUST
+
+lifecycle:
+  resume_window_days: 30
+  max_attempts: null
+  retire_after: null

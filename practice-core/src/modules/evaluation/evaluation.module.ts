@@ -9,6 +9,10 @@ import { ArtifactService } from './artifact.service';
 import { FakeAiGrader } from './fake-ai-grader.service';
 import { ClaudeAiGrader } from './claude-ai-grader.service';
 import { AI_GRADER } from './ai-grader.interface';
+import {
+  LLM_TOOL_CALLER,
+  createLlmToolCaller,
+} from './llm-tool-call.port';
 import { FakeValidatorExecutor } from './fake-validator-executor';
 import { GrpcValidatorExecutor } from './grpc-validator-executor';
 import { VALIDATOR_EXECUTOR } from './validator-executor.interface';
@@ -74,14 +78,25 @@ import { AttemptRepository } from '../attempt/attempt.repository';
     },
     FakeAiGrader,
     ClaudeAiGrader,
+    // The provider-neutral forced-tool caller ClaudeAiGrader delegates
+    // to. LLM_PROVIDER=groq -> Groq (free-tier testing, needs
+    // GROQ_API_KEY); LLM_PROVIDER=anthropic or ANTHROPIC_API_KEY set ->
+    // Anthropic (production default); neither -> null, and the AI_GRADER
+    // factory below then selects FakeAiGrader.
+    {
+      provide: LLM_TOOL_CALLER,
+      useFactory: (config: ConfigService) => createLlmToolCaller(config),
+      inject: [ConfigService],
+    },
     // Doc §6.5/§7's AI Gateway integration. Same swap-the-mock shape as
-    // VALIDATOR_EXECUTOR below: real grading (ClaudeAiGrader) is the
-    // default whenever ANTHROPIC_API_KEY is configured; falls back to
-    // FakeAiGrader otherwise so the artifact-submission pipeline still
-    // works end-to-end (with an honest, always-provisional stub result)
-    // in any environment without a provider key -- local dev, CI,
-    // content-ci.ts's own runs, none of which should require a live key
-    // just to exercise the rest of the pipeline.
+    // VALIDATOR_EXECUTOR below: real grading (ClaudeAiGrader, driven by
+    // whichever LLM_TOOL_CALLER provider is configured) is the default
+    // whenever a provider key exists; falls back to FakeAiGrader
+    // otherwise so the artifact-submission pipeline still works
+    // end-to-end (with an honest, always-provisional stub result) in any
+    // environment without a provider key -- local dev, CI, content-ci.ts's
+    // own runs, none of which should require a live key just to exercise
+    // the rest of the pipeline.
     {
       provide: AI_GRADER,
       useFactory: (
@@ -89,7 +104,10 @@ import { AttemptRepository } from '../attempt/attempt.repository';
         real: ClaudeAiGrader,
         fake: FakeAiGrader,
       ) => {
-        return config.get<string>('ANTHROPIC_API_KEY') ? real : fake;
+        const hasProvider =
+          !!config.get<string>('ANTHROPIC_API_KEY') ||
+          !!config.get<string>('GROQ_API_KEY');
+        return hasProvider ? real : fake;
       },
       inject: [ConfigService, ClaudeAiGrader, FakeAiGrader],
     },
@@ -127,6 +145,12 @@ import { AttemptRepository } from '../attempt/attempt.repository';
     // via the seam — see eslint.boundaries.mjs's SEAM list.
     AI_GRADER,
     RubricRepository,
+    // Phase 3 3.8: RealVivaModel reuses the same provider-neutral
+    // forced-tool caller. project.module registers its own instance via
+    // createVivaLlmToolCaller (viva has a distinct model-override env),
+    // but the token/factory type live here and the import must go through
+    // the seam.
+    LLM_TOOL_CALLER,
   ],
 })
 export class EvaluationModule {}

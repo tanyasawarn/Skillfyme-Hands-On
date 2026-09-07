@@ -83,12 +83,13 @@ const (
 var ManagedNamespaceLabelSelector = fmt.Sprintf("%s=%s", ManagedNamespaceLabelKey, ManagedNamespaceLabelValue)
 
 // Tier selects which driver-specific pod shape Provision builds. Mirrors
-// contracts/orchestrator.proto's Tier enum's two implemented values --
-// TIER_T0_BROWSER and TIER_T3_CLOUD_ACCOUNT have no K8s-side driver at
-// all (T0 never reaches this package; T3 is Phase 3 scope), so this type
-// deliberately only names the two tiers this package can actually
-// provision, rather than mirroring the full proto enum and having to
-// explain why half its values panic.
+// contracts/orchestrator.proto's Tier enum. This package's Provision()
+// only builds pods for T1 and T2 -- TierT0Browser never reaches this
+// package, and TierT3CloudAccount's workspace pod is built by
+// CreateT3WorkspacePod (provision_t3.go), driven by internal/t3driver,
+// not by Provision(). The value still exists here so resolveTier
+// (internal/orchestrator) can return a single, total tier decision for
+// the whole enum rather than special-casing T3 outside the function.
 type Tier int
 
 const (
@@ -98,7 +99,26 @@ const (
 	// has always provisioned, not an unrecognised/zero-Tier error.
 	TierT1SharedContainer Tier = iota
 	TierT2IsolatedMicroVM
+	// TierT3CloudAccount is provisioned by internal/t3driver (a vended
+	// cloud sandbox account + a platform-cluster workspace pod built by
+	// CreateT3WorkspacePod), NOT by Provision() below. Passing it to
+	// Provision() is a programming error -- the gRPC handler routes T3 to
+	// provisionT3 before ever calling Provisioner.Provision.
+	TierT3CloudAccount
 )
+
+func (t Tier) String() string {
+	switch t {
+	case TierT1SharedContainer:
+		return "T1_SHARED_CONTAINER"
+	case TierT2IsolatedMicroVM:
+		return "T2_ISOLATED_MICROVM"
+	case TierT3CloudAccount:
+		return "T3_CLOUD_ACCOUNT"
+	default:
+		return "UNKNOWN"
+	}
+}
 
 // ProvisionRequest is the K8s-driver input; the gRPC layer (internal/orchestrator)
 // translates the wire ProvisionRequest message into this before calling Provisioner.
@@ -289,6 +309,13 @@ func RestrictedContainerSecurityContext(readOnlyRootFilesystem bool) *corev1.Sec
 // T2 are not two parallel code paths, they're one pipeline with one
 // tier-aware step.
 func (p *Provisioner) Provision(ctx context.Context, req ProvisionRequest) error {
+	if req.Tier == TierT3CloudAccount {
+		// T3 is provisioned by internal/t3driver (CreateT3WorkspacePod +
+		// a vended cloud account), never here. Reaching this is a
+		// routing bug in the gRPC handler -- fail loud, don't silently
+		// build a T1-shaped pod.
+		return fmt.Errorf("k8s.Provisioner.Provision called with TierT3CloudAccount: T3 must go through internal/t3driver, not this path")
+	}
 	ns := namespaceName(req.EnvID)
 
 	if err := p.createNamespace(ctx, ns, req.AttemptID, req.Tier); err != nil {
@@ -865,14 +892,58 @@ func (p *Provisioner) Destroy(ctx context.Context, envID string) error {
 // Connect() to check liveness before handing out endpoints.
 func (p *Provisioner) NamespaceExists(ctx context.Context, envID string) (bool, error) {
 	ns := namespaceName(envID)
-	_, err := p.clientset.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
+	obj, err := p.clientset.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
+	// A namespace already in Terminating (a prior Destroy issued the
+	// delete; k8s finalizers are still draining it) counts as "gone" for
+	// callers deciding whether there is anything left to tear down --
+	// otherwise a second Destroy in the deletion window re-runs the whole
+	// teardown instead of returning AlreadyDestroyed, and Connect would
+	// hand out endpoints for an environment that's on its way out.
+	if obj.Status.Phase == corev1.NamespaceTerminating {
+		return false, nil
+	}
 	return true, nil
+}
+
+// WaitForNamespaceGone blocks until the env's namespace is fully deleted
+// (or the timeout / ctx elapses). Namespace deletion is asynchronous
+// (graceful termination + finalizers), so a Provision that reuses an
+// env id whose previous namespace is still Terminating -- a T3 Restore
+// re-provisioning under manifest.EnvID, or a retried cold provision --
+// otherwise fails at the first quota/limitrange create with "namespace
+// is being terminated". Returns nil once the namespace is gone; a
+// non-nil error only on an unexpected API failure (a still-present
+// namespace at deadline returns nil so the caller's own Create attempt
+// surfaces the real state rather than this masking it).
+func (p *Provisioner) WaitForNamespaceGone(ctx context.Context, envID string, timeout time.Duration) error {
+	ns := namespaceName(envID)
+	deadline := time.Now().Add(timeout)
+	for {
+		_, err := p.clientset.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil && !apierrors.IsNotFound(err) {
+			// transient API error -- keep polling until the deadline
+			if time.Now().After(deadline) {
+				return err
+			}
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 // ListManagedNamespaces returns every namespace this Orchestrator

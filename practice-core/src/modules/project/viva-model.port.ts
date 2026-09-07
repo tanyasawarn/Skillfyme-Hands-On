@@ -1,6 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import Anthropic from '@anthropic-ai/sdk';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import {
+  LLM_TOOL_CALLER,
+  type LlmToolCaller,
+} from '../evaluation/llm-tool-call.port';
 
 /**
  * Phase 3 (PLAN_PHASE3_PROJECTS.md 3.8 / B6). The model boundary for the
@@ -8,11 +10,13 @@ import Anthropic from '@anthropic-ai/sdk';
  * call (D-P3-4), the same stance as the Phase-2 rub.incident-note.v2
  * grader — NOT Phase 4's Mentor Service / LLM Gateway.
  *
- * `RealVivaModel` calls Anthropic's Messages API with forced tool-use so
- * the questions come back as schema-validated JSON. `FakeVivaModel`
- * returns deterministic, grounded-looking questions so DefenceService is
- * testable with no key. evaluation.module wiring selects by
- * ANTHROPIC_API_KEY, same as the AI grader.
+ * `RealVivaModel` forces a single tool call via the provider-neutral
+ * LlmToolCaller (Anthropic in production, Groq for free-tier testing —
+ * LLM_PROVIDER / GROQ_API_KEY / ANTHROPIC_API_KEY select which) so the
+ * questions come back as schema-shaped JSON. `FakeVivaModel` returns
+ * deterministic, grounded-looking questions so DefenceService is testable
+ * with no key. project.module wiring selects the real path whenever any
+ * provider key is set, same as the AI grader.
  */
 
 export interface VivaQuestion {
@@ -44,24 +48,19 @@ export interface VivaModel {
 @Injectable()
 export class RealVivaModel implements VivaModel {
   private readonly logger = new Logger(RealVivaModel.name);
-  private readonly client: Anthropic | null;
-  private readonly model: string;
 
-  constructor(config: ConfigService) {
-    const apiKey = config.get<string>('ANTHROPIC_API_KEY');
-    this.client = apiKey
-      ? new Anthropic({ apiKey, timeout: 45_000, maxRetries: 2 })
-      : null;
-    this.model =
-      config.get<string>('ANTHROPIC_VIVA_MODEL') ?? 'claude-sonnet-4-5';
-  }
+  constructor(
+    @Optional()
+    @Inject(LLM_TOOL_CALLER)
+    private readonly llm: LlmToolCaller | null = null,
+  ) {}
 
   async generateQuestions(
     input: GenerateQuestionsInput,
   ): Promise<VivaQuestion[]> {
-    if (!this.client) {
+    if (!this.llm) {
       throw new Error(
-        'RealVivaModel.generateQuestions() called without ANTHROPIC_API_KEY — evaluation.module should have selected FakeVivaModel',
+        'RealVivaModel.generateQuestions() called without an LLM provider configured (LLM_PROVIDER / GROQ_API_KEY / ANTHROPIC_API_KEY) — project.module should have selected FakeVivaModel',
       );
     }
     const system = [
@@ -91,43 +90,35 @@ export class RealVivaModel implements VivaModel {
       'Use the generate_questions tool.',
     ].join('\n');
 
-    const message = await this.client.messages.create({
-      model: this.model,
-      max_tokens: 2048,
+    const input_ = await this.llm.callTool({
       system,
-      messages: [{ role: 'user', content: user }],
-      tools: [
-        {
-          name: 'generate_questions',
-          description: 'Submit the grounded viva questions.',
-          input_schema: {
-            type: 'object',
-            properties: {
-              questions: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    text: { type: 'string' },
-                    groundedIn: { type: 'string' },
-                    kind: { type: 'string', enum: ['divergence', 'reasoning'] },
-                  },
-                  required: ['text', 'groundedIn', 'kind'],
+      user,
+      maxTokens: 2048,
+      tool: {
+        name: 'generate_questions',
+        description: 'Submit the grounded viva questions.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            questions: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  text: { type: 'string' },
+                  groundedIn: { type: 'string' },
+                  kind: { type: 'string', enum: ['divergence', 'reasoning'] },
                 },
+                required: ['text', 'groundedIn', 'kind'],
               },
             },
-            required: ['questions'],
           },
+          required: ['questions'],
         },
-      ],
-      tool_choice: { type: 'tool', name: 'generate_questions' },
+      },
     });
 
-    const toolUse = message.content.find((b) => b.type === 'tool_use');
-    if (!toolUse || toolUse.type !== 'tool_use') {
-      throw new Error('RealVivaModel: expected a tool_use block');
-    }
-    const raw = toolUse.input as { questions?: unknown };
+    const raw = input_ as { questions?: unknown };
     if (!Array.isArray(raw.questions)) {
       throw new Error('RealVivaModel: malformed tool input');
     }

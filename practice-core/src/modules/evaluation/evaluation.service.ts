@@ -24,14 +24,27 @@ import { ArtifactService } from './artifact.service';
 import { AttemptRepository } from '../attempt/attempt.repository';
 
 /**
- * Doc §6.4's profile-per-mode table (GUIDED_LAB -> sp.guided-lab.default,
- * PRODUCTION_SIM -> sp.production-sim.default, PROJECT ->
- * sp.project.default -- the last not yet built, Phase 3 scope). Every
- * activity YAML already authors scoring.profile (confirmed across all
- * 59 published activities); this registry is what makes evaluate()
- * actually honor that field instead of hardcoding
- * GUIDED_LAB_DEFAULT_PROFILE for every attempt regardless of mode, which
- * is what it did before sp.production-sim.default existed to select.
+ * Doc §6.4's profile-per-mode table. This registry covers the two
+ * SIGNAL-WEIGHTED profiles evaluate() runs directly:
+ *   - GUIDED_LAB    -> sp.guided-lab.default
+ *   - PRODUCTION_SIM -> sp.production-sim.default
+ * It is what makes evaluate() honor the activity YAML's scoring.profile
+ * field instead of always using GUIDED_LAB_DEFAULT_PROFILE.
+ *
+ * `sp.project.default` is DELIBERATELY NOT in this registry. PROJECT
+ * mode does not run through evaluate()'s signals -> criteria -> profile
+ * pipeline at all: a project's score is a milestone-weighted ROLL-UP of
+ * the five per-milestone gate scores plus the defence viva, with a
+ * structural 40% cap on AI-derived components. That is a different
+ * computation with a different shape, implemented in
+ * project/project-scoring.ts (`ProjectScoringService.rollup`) and driven
+ * by project.service.ts's finalizeProjectScore(), which writes
+ * attempt_score with profile_version_id = 'sp.project.default' when the
+ * final milestone gates. So `sp.project.default` IS a real, honored
+ * profile id -- it just has its own executor, the way T3 validators have
+ * their own executor rather than living in the base validator switch.
+ * A PROJECT-mode spec that somehow reached evaluate() (it should not)
+ * falls back to GUIDED_LAB_DEFAULT_PROFILE below rather than crashing.
  */
 const SCORING_PROFILE_REGISTRY: Record<string, ScoringProfile> = {
   [GUIDED_LAB_DEFAULT_PROFILE.id]: GUIDED_LAB_DEFAULT_PROFILE,

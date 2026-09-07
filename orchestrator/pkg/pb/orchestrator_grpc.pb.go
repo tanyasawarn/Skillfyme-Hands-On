@@ -49,11 +49,31 @@ type EnvironmentOrchestratorClient interface {
 	// Connect returns live connection endpoints (terminal WS, editor, preview)
 	// for an already-READY environment.
 	Connect(ctx context.Context, in *ConnectRequest, opts ...grpc.CallOption) (*ConnectResponse, error)
-	// Snapshot forces an out-of-cycle workspace snapshot (in addition to the
-	// periodic 5-min snapshot). Used before RESET_ALL, on suspend, on TTL/idle.
+	// Snapshot forces an out-of-cycle snapshot. Used before RESET_ALL, on
+	// suspend, on TTL/idle.
+	//
+	// For T1/T2 this is a workspace-volume snapshot (tar.zst to S3) — the
+	// pre-Phase-3 behaviour, still returned via the flat snapshot_id /
+	// storage_uri / bytes fields.
+	//
+	// For T3 (Phase 3, PLAN_PHASE3_PROJECTS.md A11) "snapshot" means capturing
+	// enough IaC + inventory state that the compute (workspace pod + claimed
+	// account's live resources) can be destroyed and faithfully rebuilt later:
+	// Terraform state ref (already in the platform-managed backend), a filtered
+	// `kubectl get -A`, and a cloud resource inventory. That richer manifest
+	// is returned in SnapshotResponse.manifest; the flat fields still carry the
+	// manifest object's own S3 location so existing callers keep working.
 	Snapshot(ctx context.Context, in *SnapshotRequest, opts ...grpc.CallOption) (*SnapshotResponse, error)
 	// Restore provisions a fresh environment and restores the given snapshot
 	// into it (RESET_KEEP_FILES, resume-from-suspend). §4.1, §5.5.
+	//
+	// T1/T2: unpack the workspace-volume snapshot into a fresh pod.
+	// T3 (Phase 3): re-provision the workspace pod, re-claim a sandbox account
+	// (the same one if still pooled, else a fresh one), and `terraform apply`
+	// from the persisted state referenced by the manifest so the learner's
+	// infra comes back byte-for-byte. RestoreRequest.snapshot_id identifies the
+	// manifest; cloud_account_hint lets the pool manager try to reuse the
+	// original account.
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*ProvisionResponse, error)
 	// Validate is NOT how validators run (that's Dev B's Validator Runner
 	// executing against minted credentials) — this RPC exists only to mint
@@ -234,11 +254,31 @@ type EnvironmentOrchestratorServer interface {
 	// Connect returns live connection endpoints (terminal WS, editor, preview)
 	// for an already-READY environment.
 	Connect(context.Context, *ConnectRequest) (*ConnectResponse, error)
-	// Snapshot forces an out-of-cycle workspace snapshot (in addition to the
-	// periodic 5-min snapshot). Used before RESET_ALL, on suspend, on TTL/idle.
+	// Snapshot forces an out-of-cycle snapshot. Used before RESET_ALL, on
+	// suspend, on TTL/idle.
+	//
+	// For T1/T2 this is a workspace-volume snapshot (tar.zst to S3) — the
+	// pre-Phase-3 behaviour, still returned via the flat snapshot_id /
+	// storage_uri / bytes fields.
+	//
+	// For T3 (Phase 3, PLAN_PHASE3_PROJECTS.md A11) "snapshot" means capturing
+	// enough IaC + inventory state that the compute (workspace pod + claimed
+	// account's live resources) can be destroyed and faithfully rebuilt later:
+	// Terraform state ref (already in the platform-managed backend), a filtered
+	// `kubectl get -A`, and a cloud resource inventory. That richer manifest
+	// is returned in SnapshotResponse.manifest; the flat fields still carry the
+	// manifest object's own S3 location so existing callers keep working.
 	Snapshot(context.Context, *SnapshotRequest) (*SnapshotResponse, error)
 	// Restore provisions a fresh environment and restores the given snapshot
 	// into it (RESET_KEEP_FILES, resume-from-suspend). §4.1, §5.5.
+	//
+	// T1/T2: unpack the workspace-volume snapshot into a fresh pod.
+	// T3 (Phase 3): re-provision the workspace pod, re-claim a sandbox account
+	// (the same one if still pooled, else a fresh one), and `terraform apply`
+	// from the persisted state referenced by the manifest so the learner's
+	// infra comes back byte-for-byte. RestoreRequest.snapshot_id identifies the
+	// manifest; cloud_account_hint lets the pool manager try to reuse the
+	// original account.
 	Restore(context.Context, *RestoreRequest) (*ProvisionResponse, error)
 	// Validate is NOT how validators run (that's Dev B's Validator Runner
 	// executing against minted credentials) — this RPC exists only to mint

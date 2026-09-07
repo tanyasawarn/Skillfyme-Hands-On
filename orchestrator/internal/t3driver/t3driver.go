@@ -129,8 +129,17 @@ type ProvisionResult struct {
 	CredsExpireAt time.Time
 }
 
-// Provision claims an account, starts the broker + workspace pod, and
-// returns once the pod is up with brokered creds.
+// Provision claims an account, starts the workspace pod, then starts the
+// STS broker, and returns once the pod is up with brokered creds on disk.
+//
+// Ordering: POD FIRST, then broker. The broker's initial (blocking) mint
+// writes the credentials into the pod's shared credentials volume via the
+// CredsWriter -- an emptyDir that only EXISTS once the pod does. (A
+// production sidecar-shaped broker running INSIDE the pod would instead
+// self-mint at pod startup; the platform-side broker here needs the pod
+// present before it can place the file.) On broker failure the pod is
+// torn down and the account released, so a partial Provision leaves
+// nothing behind.
 func (d *Driver) Provision(ctx context.Context, in ProvisionInput) (ProvisionResult, error) {
 	region := in.Region
 	if region == "" {
@@ -148,21 +157,6 @@ func (d *Driver) Provision(ctx context.Context, in ProvisionInput) (ProvisionRes
 		return ProvisionResult{}, fmt.Errorf("t3driver: claim account: %w", err)
 	}
 
-	// Start the STS broker (blocking initial mint), so the pod comes up
-	// with valid creds already on disk.
-	expireAt, err := d.broker.Add(ctx, credbroker.Config{
-		AttemptID:       in.AttemptID,
-		AccountID:       claim.AccountID,
-		RoleName:        claim.RoleName,
-		CredTTL:         d.cfg.CredBrokerTTL,
-		RefreshFraction: d.cfg.CredRefreshFraction,
-	}, d.aws, d.credsWriter, d.tokenSource)
-	if err != nil {
-		// roll the account back so it isn't stuck IN_USE
-		_ = d.pool.Release(context.Background(), claim.AccountID)
-		return ProvisionResult{}, fmt.Errorf("t3driver: start broker: %w", err)
-	}
-
 	pod, err := d.pods.StartWorkspacePod(ctx, StartPodInput{
 		AttemptID:      in.AttemptID,
 		EnvID:          in.EnvID,
@@ -173,9 +167,25 @@ func (d *Driver) Provision(ctx context.Context, in ProvisionInput) (ProvisionRes
 		CredsMountPath: d.cfg.CredsMountPath,
 	})
 	if err != nil {
-		d.broker.StopFor(in.AttemptID)
 		_ = d.pool.Release(context.Background(), claim.AccountID)
 		return ProvisionResult{}, fmt.Errorf("t3driver: start workspace pod: %w", err)
+	}
+
+	// Start the STS broker (blocking initial mint) -- this places the
+	// first credentials file into the now-running pod's shared volume.
+	expireAt, err := d.broker.Add(ctx, credbroker.Config{
+		AttemptID:       in.AttemptID,
+		AccountID:       claim.AccountID,
+		RoleName:        claim.RoleName,
+		CredTTL:         d.cfg.CredBrokerTTL,
+		RefreshFraction: d.cfg.CredRefreshFraction,
+	}, d.aws, d.credsWriter, d.tokenSource)
+	if err != nil {
+		// tear the pod down and roll the account back so nothing is
+		// stuck IN_USE / no orphan pod
+		_ = d.pods.DeleteWorkspacePod(context.Background(), pod.Namespace)
+		_ = d.pool.Release(context.Background(), claim.AccountID)
+		return ProvisionResult{}, fmt.Errorf("t3driver: start broker: %w", err)
 	}
 
 	log.Info("T3 environment provisioned",

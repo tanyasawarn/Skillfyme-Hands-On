@@ -195,21 +195,73 @@ func TestCheckEnvironmentOwnership_EmptyOwnerDenied(t *testing.T) {
 	}
 }
 
-func TestResolveTier_T3RequestNotHonoredAsT2(t *testing.T) {
-	// T3 (cloud account, Phase 3 scope) has no K8s-side driver at all
-	// (k8s.Tier only names T1/T2, see its own doc comment). Confirms a
-	// T3 request doesn't fall through to the T2 branch by accident (e.g.
-	// via a future careless != check) and doesn't silently become T1
-	// either -- it should resolve to T1 today only because there's
-	// nothing else this function can return, not because T3 is
-	// considered equivalent to T1. This test exists so a future T3
-	// driver addition is forced to revisit this function rather than
-	// inheriting an untested assumption.
-	tier, err := resolveTier(pb.Tier_TIER_T3_CLOUD_ACCOUNT, false)
-	if err != nil {
-		t.Fatalf("unexpected error for a T3 request (T3 has no driver yet, should fall back to T1, not error): %v", err)
+// --- T3 (TIER_T3_CLOUD_ACCOUNT), PLAN.md Phase 3 ---------------------
+//
+// resolveTier is now TOTAL over the proto enum: T3 has a real answer
+// here, not a silent T1 fallback. The 2-arg resolveTier() form used by
+// the legacy T1/T2 call site passes t3Enabled=false, so a T3 request
+// through it is a FailedPrecondition (the driver exists, the deployment
+// hasn't turned it on). The Provision handler calls resolveTierT3 with
+// the real s.t3-wired flag.
+
+func TestResolveTier_T3RejectedWhenDisabled(t *testing.T) {
+	_, err := resolveTierT3(pb.Tier_TIER_T3_CLOUD_ACCOUNT, false, false)
+	if err == nil {
+		t.Fatal("expected an error when T3 is requested but not enabled")
 	}
-	if tier != k8s.TierT1SharedContainer {
-		t.Errorf("expected T1 fallback for a T3 request (no T3 driver exists), got %v", tier)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("expected codes.FailedPrecondition, got %v", status.Code(err))
+	}
+}
+
+func TestResolveTier_T3ResolvesToT3TierWhenEnabled(t *testing.T) {
+	tier, err := resolveTierT3(pb.Tier_TIER_T3_CLOUD_ACCOUNT, false, true)
+	if err != nil {
+		t.Fatalf("unexpected error when T3 is enabled: %v", err)
+	}
+	if tier != k8s.TierT3CloudAccount {
+		t.Errorf("expected k8s.TierT3CloudAccount, got %v", tier)
+	}
+}
+
+// A disabled-T3 request must ERROR, never silently resolve to T1 -- same
+// security stance as the T2 downgrade guard: a caller that asked for a
+// dedicated cloud sandbox and got a shared container instead, with no
+// error, would be a real isolation discrepancy.
+func TestResolveTier_T3NeverSilentlyDowngradesToT1(t *testing.T) {
+	tier, err := resolveTierT3(pb.Tier_TIER_T3_CLOUD_ACCOUNT, false, false)
+	if err == nil && tier == k8s.TierT1SharedContainer {
+		t.Fatal("SECURITY REGRESSION: a disabled T3 request silently resolved to T1 with no error -- must reject explicitly")
+	}
+}
+
+// resolveTier is TOTAL: every proto Tier value returns a definite
+// (tier, err), nothing falls through to an accidental default.
+func TestResolveTier_TotalOverProtoEnum(t *testing.T) {
+	cases := []struct {
+		tier     pb.Tier
+		t2, t3   bool
+		wantTier k8s.Tier
+		wantErr  bool
+	}{
+		{pb.Tier_TIER_UNSPECIFIED, false, false, k8s.TierT1SharedContainer, false},
+		{pb.Tier_TIER_T0_BROWSER, false, false, k8s.TierT1SharedContainer, false},
+		{pb.Tier_TIER_T1_SHARED_CONTAINER, false, false, k8s.TierT1SharedContainer, false},
+		{pb.Tier_TIER_T2_ISOLATED_MICROVM, true, false, k8s.TierT2IsolatedMicroVM, false},
+		{pb.Tier_TIER_T2_ISOLATED_MICROVM, false, false, k8s.TierT1SharedContainer, true},
+		{pb.Tier_TIER_T3_CLOUD_ACCOUNT, false, true, k8s.TierT3CloudAccount, false},
+		{pb.Tier_TIER_T3_CLOUD_ACCOUNT, false, false, k8s.TierT1SharedContainer, true},
+	}
+	for _, c := range cases {
+		got, err := resolveTierT3(c.tier, c.t2, c.t3)
+		if c.wantErr && err == nil {
+			t.Errorf("%v (t2=%v t3=%v): expected an error, got none", c.tier, c.t2, c.t3)
+		}
+		if !c.wantErr && err != nil {
+			t.Errorf("%v (t2=%v t3=%v): unexpected error: %v", c.tier, c.t2, c.t3, err)
+		}
+		if got != c.wantTier {
+			t.Errorf("%v (t2=%v t3=%v): tier = %v, want %v", c.tier, c.t2, c.t3, got, c.wantTier)
+		}
 	}
 }

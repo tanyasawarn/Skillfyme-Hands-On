@@ -242,15 +242,27 @@ func main() {
 	// are all read from here. Empty port disables the endpoint.
 	// Phase 3 Stage 2: T3 cloud-account lifecycle (account pool, STS
 	// broker, budget enforcement, nuke sweeper, cost pollers). No-op
-	// unless CLOUD_ACCOUNTS_ENABLED=true — see internal/config for the
-	// full env-var set. `terminateT3` is a stub until the T3 driver's
-	// Destroy-by-attempt path lands (Stage 3.2); it logs the intent so a
-	// budget breach is still visible.
-	cloudLife := setupCloudLifecycle(ctx, cfg, db, rdb, nc, func(_ context.Context, attemptID string) error {
-		log.Printf("[cloud] budget breach: would force-terminate T3 for attempt %s (T3 driver lands in Stage 3.2)", attemptID)
-		return nil
+	// unless CLOUD_ACCOUNTS_MODE is fake/real — see internal/config for
+	// the full env-var set.
+	//
+	// `terminateT3` is the force-terminate hook the budget enforcer
+	// calls at the 100% breach. It's late-bound: setupCloudLifecycle
+	// runs before setupT3 builds the driver, so the closure dispatches
+	// through terminateT3Fn, which setupT3 populates with the real
+	// Destroy-by-attempt path.
+	cloudLife := setupCloudLifecycle(ctx, cfg, db, rdb, nc, func(c context.Context, attemptID string) error {
+		if terminateT3Fn == nil {
+			log.Printf("[cloud] budget breach for attempt %s but the T3 driver is not wired — cannot force-terminate", attemptID)
+			return nil
+		}
+		return terminateT3Fn(c, attemptID)
 	})
-	_ = cloudLife // Provision-path wiring (LaunchCap, Pool.Claim) is Stage 3.2
+
+	// PLAN.md Phase 3: wire the T3 tier (driver + snapshot/restore) onto
+	// the gRPC server. No-op unless CLOUD_ACCOUNTS_MODE is fake or real.
+	// In fake (local-real) mode this seeds N synthetic AVAILABLE sandbox
+	// accounts so a T3 Provision has something to claim.
+	setupT3(ctx, cfg, server, provisioner, tokenValidator, cloudLife, db, 3)
 
 	if cfg.MetricsPort != "" {
 		metricsMux := http.NewServeMux()

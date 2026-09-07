@@ -5,10 +5,16 @@ import type { Database } from '../../src/db/schema';
 import { DatabaseModule, KYSELY } from '../../src/db/database.module';
 import { EventStoreModule } from '../../src/modules/event-store/event-store.module';
 import { EvaluationModule } from '../../src/modules/evaluation/evaluation.module';
+import { AI_GRADER } from '../../src/modules/evaluation/ai-grader.interface';
+import { FakeAiGrader } from '../../src/modules/evaluation/fake-ai-grader.service';
 import { GrpcValidatorExecutor } from '../../src/modules/evaluation/grpc-validator-executor';
 import { OrchestratorShellRunner } from '../../src/modules/evaluation/t3/orchestrator-shell-runner';
 import { GrpcProjectOrchestrator } from '../../src/modules/project/grpc-project-orchestrator';
 import { ProjectModule } from '../../src/modules/project/project.module';
+import {
+  VIVA_MODEL,
+  FakeVivaModel,
+} from '../../src/modules/project/viva-model.port';
 import { ProjectService } from '../../src/modules/project/project.service';
 import { DefenceService } from '../../src/modules/project/defence.service';
 import { truncateAll } from './test-db';
@@ -21,6 +27,13 @@ const noopGrpc = {
   onModuleInit: () => undefined,
   onModuleDestroy: () => undefined,
 };
+
+// This suite tests the milestone STATE MACHINE, not the LLM. Force the
+// fake grader + fake viva regardless of whether GROQ_API_KEY /
+// ANTHROPIC_API_KEY happen to be set in the environment (they are, in
+// local dev — see .env), so these tests stay fast and deterministic. The
+// real-LLM path is covered by mentor.integration.spec.ts and
+// authoring-assistant.integration.spec.ts.
 
 /**
  * Phase 3 (PLAN_PHASE3_PROJECTS.md 1.6 / B2). The milestone state machine
@@ -58,6 +71,10 @@ describe('ProjectService milestone state machine (integration) — Phase 3 1.6',
       .useValue(noopGrpc)
       .overrideProvider(GrpcProjectOrchestrator)
       .useValue(noopGrpc)
+      .overrideProvider(AI_GRADER)
+      .useValue(new FakeAiGrader())
+      .overrideProvider(VIVA_MODEL)
+      .useValue(new FakeVivaModel())
       .compile();
   }
 

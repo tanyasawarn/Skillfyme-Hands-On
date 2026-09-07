@@ -251,6 +251,17 @@ func (m *Manager) Restore(ctx context.Context, in RestoreInput) (RestoreResult, 
 	// lives in the platform-managed backend (manifest.TFBackendURI); a
 	// re-`init -reconfigure` + `apply` reconstructs the infra. On a clean
 	// resume this reports "no changes".
+	//
+	// The workspace's .tf FILES come back from Git (the other half of the
+	// durable store -- "durable state = Git + TF remote state"), cloned
+	// into the fresh pod before this step in a full deployment. When the
+	// workspace has no Terraform configuration at all -- the learner
+	// suspended before writing any, or Git restore is handled out of band
+	// -- `terraform apply` errors with "No configuration files"; that is
+	// a legitimate empty-workspace resume, not a Restore failure, so it
+	// is tolerated (the pod is up, the account is re-claimed, the learner
+	// continues). A genuine apply failure (a real config that won't
+	// apply) still surfaces.
 	out, err := m.shell.Run(ctx, envID, []string{
 		"sh", "-c",
 		fmt.Sprintf(
@@ -262,8 +273,12 @@ func (m *Manager) Restore(ctx context.Context, in RestoreInput) (RestoreResult, 
 			region,
 		),
 	})
-	if err != nil {
+	if err != nil && !isEmptyTerraformWorkspace(out) {
 		return RestoreResult{}, fmt.Errorf("snapshotstate: terraform apply on restore: %w (output: %s)", err, truncate(out, 400))
+	}
+	if err != nil {
+		log.Info("T3 restore: workspace has no Terraform configuration yet — nothing to apply",
+			"env_id", envID, "attempt_id", in.AttemptID)
 	}
 
 	log.Info("T3 environment restored from snapshot",
@@ -275,11 +290,20 @@ func (m *Manager) Restore(ctx context.Context, in RestoreInput) (RestoreResult, 
 // --- helpers -------------------------------------------------------
 
 func (m *Manager) tfStateSerial(ctx context.Context, envID, dir string) (int64, error) {
+	// Same tolerance stance as cloudInventory below: a `terraform state
+	// pull` can legitimately produce nothing to read -- an uninitialised
+	// TF root, a project milestone that hasn't run terraform yet, or a
+	// local-real dev pod without the terraform binary at all. None of
+	// those is a snapshot failure: the manifest just records serial 0
+	// (there is no infra state to pin). A `2>/dev/null || echo {}`
+	// guard keeps a missing/empty state from failing the whole Snapshot.
 	out, err := m.shell.Run(ctx, envID, []string{
 		"sh", "-c",
-		fmt.Sprintf("cd %s && terraform state pull", shQuote(dir)),
+		fmt.Sprintf("cd %s 2>/dev/null && terraform state pull 2>/dev/null || echo '{}'", shQuote(dir)),
 	})
 	if err != nil {
+		// The shell itself failed (not just terraform) -- e.g. the pod is
+		// gone. That IS a real error.
 		return 0, err
 	}
 	var st struct {
@@ -312,6 +336,15 @@ func (m *Manager) cloudInventory(ctx context.Context, envID, attemptID string) (
 
 func backendBucket(uri string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(uri, "s3://"), "https://")
+}
+
+// isEmptyTerraformWorkspace reports whether a `terraform apply` failure
+// is just "there is no configuration to apply" (an empty / not-yet-
+// authored workspace on resume) rather than a real apply error.
+func isEmptyTerraformWorkspace(out string) bool {
+	return strings.Contains(out, "No configuration files") ||
+		strings.Contains(out, "no Terraform configuration files") ||
+		strings.Contains(out, "empty directory")
 }
 
 func shQuote(s string) string {

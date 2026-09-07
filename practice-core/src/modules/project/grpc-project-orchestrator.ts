@@ -45,13 +45,36 @@ export class GrpcProjectOrchestrator
   async provisionForMilestone(input: {
     attemptId: string;
     milestoneKey: string;
+    /** activity_spec.environment.cloud.regions[0], if the caller has it. */
+    region?: string;
+    /** activity_spec.environment.cost_budget_usd, if the caller has it. */
+    budgetUsd?: number;
   }): Promise<ProjectEnvHandle> {
+    // contracts/orchestrator.proto's ProvisionRequest has no dedicated
+    // region / cloud-budget fields (a contract change is a shared-PR
+    // item), so T3 callers pack them into network_policy as
+    // "region=<r>;budget=<usd>" — the orchestrator's provisionT3 parses
+    // exactly this (see parseT3Hints). Either key may be omitted; the
+    // orchestrator falls back to its own T3 defaults. Caller-supplied
+    // values win over the T3_DEFAULT_* env fallbacks here.
+    const region =
+      input.region ?? this.config.get<string>('T3_DEFAULT_REGION') ?? '';
+    const budgetRaw =
+      input.budgetUsd ??
+      Number(this.config.get<string>('T3_DEFAULT_BUDGET_USD') ?? '0');
+    const hints: string[] = [];
+    if (region) hints.push(`region=${region}`);
+    if (Number.isFinite(budgetRaw) && budgetRaw > 0) {
+      hints.push(`budget=${budgetRaw}`);
+    }
+
     const res = await this.call<
       {
         attemptId: string;
         tier: string;
         blueprintId: string;
         blueprintVersion: string;
+        networkPolicy: string;
       },
       { environmentId?: string; status?: string; endpoints?: unknown }
     >(
@@ -61,6 +84,7 @@ export class GrpcProjectOrchestrator
         tier: 'TIER_T3_CLOUD_ACCOUNT',
         blueprintId: 'bp.project.default',
         blueprintVersion: 'v1',
+        networkPolicy: hints.join(';'),
       },
       120_000,
     );

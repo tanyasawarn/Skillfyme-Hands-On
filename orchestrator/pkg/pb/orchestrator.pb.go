@@ -632,18 +632,142 @@ func (x *SnapshotRequest) GetReason() string {
 	return ""
 }
 
+// SnapshotManifest is the Phase 3 (T3) IaC-state capture — see the Snapshot
+// RPC comment. It is what makes "destroy the compute, keep the work" safe for
+// project mode (memory.md §12.3: "suspension is the norm, not the exception").
+// The manifest object itself is stored at SnapshotResponse.storage_uri; these
+// fields are its schema so a caller can reason about a restore without
+// re-fetching the blob.
+type SnapshotManifest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Terraform remote state the learner's infra lives in. The state itself is
+	// NOT copied here — it already persists in the platform-managed backend
+	// (S3 + DynamoDB lock in the Platform account, PLAN_PHASE3_PROJECTS.md A5),
+	// which is exactly why destroy/recreate is cheap. These fields just pin
+	// which state + version a Restore must `terraform apply` from.
+	TfBackendUri  string `protobuf:"bytes,1,opt,name=tf_backend_uri,json=tfBackendUri,proto3" json:"tf_backend_uri,omitempty"`    // e.g. "s3://pe-tfstate-prod/attempts/{id}/terraform.tfstate"
+	TfStateSerial string `protobuf:"bytes,2,opt,name=tf_state_serial,json=tfStateSerial,proto3" json:"tf_state_serial,omitempty"` // the state file's "serial" at snapshot time, for drift detection on restore
+	TfWorkspace   string `protobuf:"bytes,3,opt,name=tf_workspace,json=tfWorkspace,proto3" json:"tf_workspace,omitempty"`         // terraform workspace name, if not "default"
+	// Filtered `kubectl get -A` for the learner's own namespaces in the
+	// sandbox cluster (EKS), stored as a gzipped JSON blob at this URI. Used to
+	// diff post-restore and to show the learner what was running when they
+	// suspended.
+	K8SInventoryUri string `protobuf:"bytes,4,opt,name=k8s_inventory_uri,json=k8sInventoryUri,proto3" json:"k8s_inventory_uri,omitempty"`
+	// Cloud resource inventory (AWS Resource Explorer / Config query, tag-scoped
+	// to attempt_id), gzipped JSON at this URI. This is the reference the
+	// milestone-5 "resource inventory snapshotted (survives the nuke)" step
+	// (memory.md §12.3) reads, and what post-nuke verification diffs against.
+	CloudInventoryUri  string `protobuf:"bytes,5,opt,name=cloud_inventory_uri,json=cloudInventoryUri,proto3" json:"cloud_inventory_uri,omitempty"`
+	CloudResourceCount int32  `protobuf:"varint,6,opt,name=cloud_resource_count,json=cloudResourceCount,proto3" json:"cloud_resource_count,omitempty"` // quick headline for dashboards / logs
+	SandboxAccountId   string `protobuf:"bytes,7,opt,name=sandbox_account_id,json=sandboxAccountId,proto3" json:"sandbox_account_id,omitempty"`        // the account that held these resources (12-digit AWS id)
+	CapturedAt         string `protobuf:"bytes,8,opt,name=captured_at,json=capturedAt,proto3" json:"captured_at,omitempty"`                            // RFC3339
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *SnapshotManifest) Reset() {
+	*x = SnapshotManifest{}
+	mi := &file_orchestrator_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SnapshotManifest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SnapshotManifest) ProtoMessage() {}
+
+func (x *SnapshotManifest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SnapshotManifest.ProtoReflect.Descriptor instead.
+func (*SnapshotManifest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *SnapshotManifest) GetTfBackendUri() string {
+	if x != nil {
+		return x.TfBackendUri
+	}
+	return ""
+}
+
+func (x *SnapshotManifest) GetTfStateSerial() string {
+	if x != nil {
+		return x.TfStateSerial
+	}
+	return ""
+}
+
+func (x *SnapshotManifest) GetTfWorkspace() string {
+	if x != nil {
+		return x.TfWorkspace
+	}
+	return ""
+}
+
+func (x *SnapshotManifest) GetK8SInventoryUri() string {
+	if x != nil {
+		return x.K8SInventoryUri
+	}
+	return ""
+}
+
+func (x *SnapshotManifest) GetCloudInventoryUri() string {
+	if x != nil {
+		return x.CloudInventoryUri
+	}
+	return ""
+}
+
+func (x *SnapshotManifest) GetCloudResourceCount() int32 {
+	if x != nil {
+		return x.CloudResourceCount
+	}
+	return 0
+}
+
+func (x *SnapshotManifest) GetSandboxAccountId() string {
+	if x != nil {
+		return x.SandboxAccountId
+	}
+	return ""
+}
+
+func (x *SnapshotManifest) GetCapturedAt() string {
+	if x != nil {
+		return x.CapturedAt
+	}
+	return ""
+}
+
 type SnapshotResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SnapshotId    string                 `protobuf:"bytes,1,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
-	StorageUri    string                 `protobuf:"bytes,2,opt,name=storage_uri,json=storageUri,proto3" json:"storage_uri,omitempty"` // attempts/{id}/snapshots/{ts}.tar.zst
-	Bytes         int64                  `protobuf:"varint,3,opt,name=bytes,proto3" json:"bytes,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	SnapshotId string                 `protobuf:"bytes,1,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
+	StorageUri string                 `protobuf:"bytes,2,opt,name=storage_uri,json=storageUri,proto3" json:"storage_uri,omitempty"` // T1/T2: attempts/{id}/snapshots/{ts}.tar.zst
+	// T3:    attempts/{id}/snapshots/{ts}.manifest.json
+	Bytes int64 `protobuf:"varint,3,opt,name=bytes,proto3" json:"bytes,omitempty"`
+	// Present only for T3 snapshots. Absent (default) for T1/T2 workspace-volume
+	// snapshots, which are fully described by the three flat fields above —
+	// additive, so existing callers ignore it harmlessly.
+	Manifest      *SnapshotManifest `protobuf:"bytes,4,opt,name=manifest,proto3" json:"manifest,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SnapshotResponse) Reset() {
 	*x = SnapshotResponse{}
-	mi := &file_orchestrator_proto_msgTypes[7]
+	mi := &file_orchestrator_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -655,7 +779,7 @@ func (x *SnapshotResponse) String() string {
 func (*SnapshotResponse) ProtoMessage() {}
 
 func (x *SnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[7]
+	mi := &file_orchestrator_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -668,7 +792,7 @@ func (x *SnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotResponse.ProtoReflect.Descriptor instead.
 func (*SnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{7}
+	return file_orchestrator_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *SnapshotResponse) GetSnapshotId() string {
@@ -692,6 +816,13 @@ func (x *SnapshotResponse) GetBytes() int64 {
 	return 0
 }
 
+func (x *SnapshotResponse) GetManifest() *SnapshotManifest {
+	if x != nil {
+		return x.Manifest
+	}
+	return nil
+}
+
 type RestoreRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	AttemptId        string                 `protobuf:"bytes,1,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
@@ -700,13 +831,18 @@ type RestoreRequest struct {
 	BlueprintVersion string                 `protobuf:"bytes,4,opt,name=blueprint_version,json=blueprintVersion,proto3" json:"blueprint_version,omitempty"`
 	Tier             Tier                   `protobuf:"varint,5,opt,name=tier,proto3,enum=practiceengine.orchestrator.v1.Tier" json:"tier,omitempty"`
 	Resources        *ResourceSpec          `protobuf:"bytes,6,opt,name=resources,proto3" json:"resources,omitempty"`
+	// Phase 3 (T3): the sandbox account id from the snapshot manifest. The
+	// Account Pool Manager tries to re-claim this exact account if it is still
+	// AVAILABLE (avoids a fresh baseline apply); falls back to any AVAILABLE
+	// account otherwise. Ignored for T1/T2. Empty = no preference.
+	CloudAccountHint string `protobuf:"bytes,7,opt,name=cloud_account_hint,json=cloudAccountHint,proto3" json:"cloud_account_hint,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
 
 func (x *RestoreRequest) Reset() {
 	*x = RestoreRequest{}
-	mi := &file_orchestrator_proto_msgTypes[8]
+	mi := &file_orchestrator_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -718,7 +854,7 @@ func (x *RestoreRequest) String() string {
 func (*RestoreRequest) ProtoMessage() {}
 
 func (x *RestoreRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[8]
+	mi := &file_orchestrator_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -731,7 +867,7 @@ func (x *RestoreRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreRequest.ProtoReflect.Descriptor instead.
 func (*RestoreRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{8}
+	return file_orchestrator_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RestoreRequest) GetAttemptId() string {
@@ -776,6 +912,13 @@ func (x *RestoreRequest) GetResources() *ResourceSpec {
 	return nil
 }
 
+func (x *RestoreRequest) GetCloudAccountHint() string {
+	if x != nil {
+		return x.CloudAccountHint
+	}
+	return ""
+}
+
 type MintCredentialsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	EnvironmentId string                 `protobuf:"bytes,1,opt,name=environment_id,json=environmentId,proto3" json:"environment_id,omitempty"`
@@ -792,7 +935,7 @@ type MintCredentialsRequest struct {
 
 func (x *MintCredentialsRequest) Reset() {
 	*x = MintCredentialsRequest{}
-	mi := &file_orchestrator_proto_msgTypes[9]
+	mi := &file_orchestrator_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -804,7 +947,7 @@ func (x *MintCredentialsRequest) String() string {
 func (*MintCredentialsRequest) ProtoMessage() {}
 
 func (x *MintCredentialsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[9]
+	mi := &file_orchestrator_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -817,7 +960,7 @@ func (x *MintCredentialsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintCredentialsRequest.ProtoReflect.Descriptor instead.
 func (*MintCredentialsRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{9}
+	return file_orchestrator_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *MintCredentialsRequest) GetEnvironmentId() string {
@@ -858,7 +1001,7 @@ type MintCredentialsResponse struct {
 
 func (x *MintCredentialsResponse) Reset() {
 	*x = MintCredentialsResponse{}
-	mi := &file_orchestrator_proto_msgTypes[10]
+	mi := &file_orchestrator_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -870,7 +1013,7 @@ func (x *MintCredentialsResponse) String() string {
 func (*MintCredentialsResponse) ProtoMessage() {}
 
 func (x *MintCredentialsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[10]
+	mi := &file_orchestrator_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -883,7 +1026,7 @@ func (x *MintCredentialsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintCredentialsResponse.ProtoReflect.Descriptor instead.
 func (*MintCredentialsResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{10}
+	return file_orchestrator_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *MintCredentialsResponse) GetCredentialRef() string {
@@ -919,7 +1062,7 @@ type DestroyRequest struct {
 
 func (x *DestroyRequest) Reset() {
 	*x = DestroyRequest{}
-	mi := &file_orchestrator_proto_msgTypes[11]
+	mi := &file_orchestrator_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -931,7 +1074,7 @@ func (x *DestroyRequest) String() string {
 func (*DestroyRequest) ProtoMessage() {}
 
 func (x *DestroyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[11]
+	mi := &file_orchestrator_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -944,7 +1087,7 @@ func (x *DestroyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DestroyRequest.ProtoReflect.Descriptor instead.
 func (*DestroyRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{11}
+	return file_orchestrator_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *DestroyRequest) GetEnvironmentId() string {
@@ -977,7 +1120,7 @@ type DestroyResponse struct {
 
 func (x *DestroyResponse) Reset() {
 	*x = DestroyResponse{}
-	mi := &file_orchestrator_proto_msgTypes[12]
+	mi := &file_orchestrator_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -989,7 +1132,7 @@ func (x *DestroyResponse) String() string {
 func (*DestroyResponse) ProtoMessage() {}
 
 func (x *DestroyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[12]
+	mi := &file_orchestrator_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1002,7 +1145,7 @@ func (x *DestroyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DestroyResponse.ProtoReflect.Descriptor instead.
 func (*DestroyResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{12}
+	return file_orchestrator_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *DestroyResponse) GetAlreadyDestroyed() bool {
@@ -1035,7 +1178,7 @@ type InjectFaultRequest struct {
 
 func (x *InjectFaultRequest) Reset() {
 	*x = InjectFaultRequest{}
-	mi := &file_orchestrator_proto_msgTypes[13]
+	mi := &file_orchestrator_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1047,7 +1190,7 @@ func (x *InjectFaultRequest) String() string {
 func (*InjectFaultRequest) ProtoMessage() {}
 
 func (x *InjectFaultRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[13]
+	mi := &file_orchestrator_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1060,7 +1203,7 @@ func (x *InjectFaultRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InjectFaultRequest.ProtoReflect.Descriptor instead.
 func (*InjectFaultRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{13}
+	return file_orchestrator_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *InjectFaultRequest) GetEnvironmentId() string {
@@ -1108,7 +1251,7 @@ type InjectFaultResponse struct {
 
 func (x *InjectFaultResponse) Reset() {
 	*x = InjectFaultResponse{}
-	mi := &file_orchestrator_proto_msgTypes[14]
+	mi := &file_orchestrator_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1120,7 +1263,7 @@ func (x *InjectFaultResponse) String() string {
 func (*InjectFaultResponse) ProtoMessage() {}
 
 func (x *InjectFaultResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[14]
+	mi := &file_orchestrator_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1133,7 +1276,7 @@ func (x *InjectFaultResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InjectFaultResponse.ProtoReflect.Descriptor instead.
 func (*InjectFaultResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{14}
+	return file_orchestrator_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *InjectFaultResponse) GetApplied() bool {
@@ -1160,7 +1303,7 @@ type CaptureBaselineRequest struct {
 
 func (x *CaptureBaselineRequest) Reset() {
 	*x = CaptureBaselineRequest{}
-	mi := &file_orchestrator_proto_msgTypes[15]
+	mi := &file_orchestrator_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1172,7 +1315,7 @@ func (x *CaptureBaselineRequest) String() string {
 func (*CaptureBaselineRequest) ProtoMessage() {}
 
 func (x *CaptureBaselineRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[15]
+	mi := &file_orchestrator_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1185,7 +1328,7 @@ func (x *CaptureBaselineRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CaptureBaselineRequest.ProtoReflect.Descriptor instead.
 func (*CaptureBaselineRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{15}
+	return file_orchestrator_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *CaptureBaselineRequest) GetEnvironmentId() string {
@@ -1213,7 +1356,7 @@ type CaptureBaselineResponse struct {
 
 func (x *CaptureBaselineResponse) Reset() {
 	*x = CaptureBaselineResponse{}
-	mi := &file_orchestrator_proto_msgTypes[16]
+	mi := &file_orchestrator_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1225,7 +1368,7 @@ func (x *CaptureBaselineResponse) String() string {
 func (*CaptureBaselineResponse) ProtoMessage() {}
 
 func (x *CaptureBaselineResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[16]
+	mi := &file_orchestrator_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1238,7 +1381,7 @@ func (x *CaptureBaselineResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CaptureBaselineResponse.ProtoReflect.Descriptor instead.
 func (*CaptureBaselineResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{16}
+	return file_orchestrator_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *CaptureBaselineResponse) GetSnapshotKey() string {
@@ -1272,7 +1415,7 @@ type CheckRegressionRequest struct {
 
 func (x *CheckRegressionRequest) Reset() {
 	*x = CheckRegressionRequest{}
-	mi := &file_orchestrator_proto_msgTypes[17]
+	mi := &file_orchestrator_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1284,7 +1427,7 @@ func (x *CheckRegressionRequest) String() string {
 func (*CheckRegressionRequest) ProtoMessage() {}
 
 func (x *CheckRegressionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[17]
+	mi := &file_orchestrator_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1297,7 +1440,7 @@ func (x *CheckRegressionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckRegressionRequest.ProtoReflect.Descriptor instead.
 func (*CheckRegressionRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{17}
+	return file_orchestrator_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *CheckRegressionRequest) GetEnvironmentId() string {
@@ -1324,7 +1467,7 @@ type CheckRegressionResponse struct {
 
 func (x *CheckRegressionResponse) Reset() {
 	*x = CheckRegressionResponse{}
-	mi := &file_orchestrator_proto_msgTypes[18]
+	mi := &file_orchestrator_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1336,7 +1479,7 @@ func (x *CheckRegressionResponse) String() string {
 func (*CheckRegressionResponse) ProtoMessage() {}
 
 func (x *CheckRegressionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[18]
+	mi := &file_orchestrator_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1349,7 +1492,7 @@ func (x *CheckRegressionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckRegressionResponse.ProtoReflect.Descriptor instead.
 func (*CheckRegressionResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{18}
+	return file_orchestrator_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *CheckRegressionResponse) GetRegressionFound() bool {
@@ -1385,7 +1528,7 @@ type ExecValidatorRequest struct {
 
 func (x *ExecValidatorRequest) Reset() {
 	*x = ExecValidatorRequest{}
-	mi := &file_orchestrator_proto_msgTypes[19]
+	mi := &file_orchestrator_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1397,7 +1540,7 @@ func (x *ExecValidatorRequest) String() string {
 func (*ExecValidatorRequest) ProtoMessage() {}
 
 func (x *ExecValidatorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[19]
+	mi := &file_orchestrator_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1410,7 +1553,7 @@ func (x *ExecValidatorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecValidatorRequest.ProtoReflect.Descriptor instead.
 func (*ExecValidatorRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{19}
+	return file_orchestrator_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ExecValidatorRequest) GetEnvironmentId() string {
@@ -1474,7 +1617,7 @@ type ExecValidatorResponse struct {
 
 func (x *ExecValidatorResponse) Reset() {
 	*x = ExecValidatorResponse{}
-	mi := &file_orchestrator_proto_msgTypes[20]
+	mi := &file_orchestrator_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1486,7 +1629,7 @@ func (x *ExecValidatorResponse) String() string {
 func (*ExecValidatorResponse) ProtoMessage() {}
 
 func (x *ExecValidatorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[20]
+	mi := &file_orchestrator_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1499,7 +1642,7 @@ func (x *ExecValidatorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecValidatorResponse.ProtoReflect.Descriptor instead.
 func (*ExecValidatorResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{20}
+	return file_orchestrator_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ExecValidatorResponse) GetStatus() string {
@@ -1546,7 +1689,7 @@ type ExecShellRequest struct {
 
 func (x *ExecShellRequest) Reset() {
 	*x = ExecShellRequest{}
-	mi := &file_orchestrator_proto_msgTypes[21]
+	mi := &file_orchestrator_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1558,7 +1701,7 @@ func (x *ExecShellRequest) String() string {
 func (*ExecShellRequest) ProtoMessage() {}
 
 func (x *ExecShellRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[21]
+	mi := &file_orchestrator_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1571,7 +1714,7 @@ func (x *ExecShellRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecShellRequest.ProtoReflect.Descriptor instead.
 func (*ExecShellRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{21}
+	return file_orchestrator_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ExecShellRequest) GetEnvironmentId() string {
@@ -1615,7 +1758,7 @@ type ExecShellResponse struct {
 
 func (x *ExecShellResponse) Reset() {
 	*x = ExecShellResponse{}
-	mi := &file_orchestrator_proto_msgTypes[22]
+	mi := &file_orchestrator_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1627,7 +1770,7 @@ func (x *ExecShellResponse) String() string {
 func (*ExecShellResponse) ProtoMessage() {}
 
 func (x *ExecShellResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[22]
+	mi := &file_orchestrator_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1640,7 +1783,7 @@ func (x *ExecShellResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecShellResponse.ProtoReflect.Descriptor instead.
 func (*ExecShellResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{22}
+	return file_orchestrator_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ExecShellResponse) GetExitCode() int32 {
@@ -1727,13 +1870,24 @@ const file_orchestrator_proto_rawDesc = "" +
 	"\x0eenvironment_id\x18\x01 \x01(\tR\renvironmentId\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x02 \x01(\tR\tattemptId\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"j\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xe0\x02\n" +
+	"\x10SnapshotManifest\x12$\n" +
+	"\x0etf_backend_uri\x18\x01 \x01(\tR\ftfBackendUri\x12&\n" +
+	"\x0ftf_state_serial\x18\x02 \x01(\tR\rtfStateSerial\x12!\n" +
+	"\ftf_workspace\x18\x03 \x01(\tR\vtfWorkspace\x12*\n" +
+	"\x11k8s_inventory_uri\x18\x04 \x01(\tR\x0fk8sInventoryUri\x12.\n" +
+	"\x13cloud_inventory_uri\x18\x05 \x01(\tR\x11cloudInventoryUri\x120\n" +
+	"\x14cloud_resource_count\x18\x06 \x01(\x05R\x12cloudResourceCount\x12,\n" +
+	"\x12sandbox_account_id\x18\a \x01(\tR\x10sandboxAccountId\x12\x1f\n" +
+	"\vcaptured_at\x18\b \x01(\tR\n" +
+	"capturedAt\"\xb8\x01\n" +
 	"\x10SnapshotResponse\x12\x1f\n" +
 	"\vsnapshot_id\x18\x01 \x01(\tR\n" +
 	"snapshotId\x12\x1f\n" +
 	"\vstorage_uri\x18\x02 \x01(\tR\n" +
 	"storageUri\x12\x14\n" +
-	"\x05bytes\x18\x03 \x01(\x03R\x05bytes\"\xa6\x02\n" +
+	"\x05bytes\x18\x03 \x01(\x03R\x05bytes\x12L\n" +
+	"\bmanifest\x18\x04 \x01(\v20.practiceengine.orchestrator.v1.SnapshotManifestR\bmanifest\"\xd4\x02\n" +
 	"\x0eRestoreRequest\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x01 \x01(\tR\tattemptId\x12\x1f\n" +
@@ -1742,7 +1896,8 @@ const file_orchestrator_proto_rawDesc = "" +
 	"\fblueprint_id\x18\x03 \x01(\tR\vblueprintId\x12+\n" +
 	"\x11blueprint_version\x18\x04 \x01(\tR\x10blueprintVersion\x128\n" +
 	"\x04tier\x18\x05 \x01(\x0e2$.practiceengine.orchestrator.v1.TierR\x04tier\x12J\n" +
-	"\tresources\x18\x06 \x01(\v2,.practiceengine.orchestrator.v1.ResourceSpecR\tresources\"\x97\x01\n" +
+	"\tresources\x18\x06 \x01(\v2,.practiceengine.orchestrator.v1.ResourceSpecR\tresources\x12,\n" +
+	"\x12cloud_account_hint\x18\a \x01(\tR\x10cloudAccountHint\"\x97\x01\n" +
 	"\x16MintCredentialsRequest\x12%\n" +
 	"\x0eenvironment_id\x18\x01 \x01(\tR\renvironmentId\x12\x1f\n" +
 	"\vttl_seconds\x18\x02 \x01(\x05R\n" +
@@ -1860,7 +2015,7 @@ func file_orchestrator_proto_rawDescGZIP() []byte {
 }
 
 var file_orchestrator_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_orchestrator_proto_goTypes = []any{
 	(Tier)(0),                       // 0: practiceengine.orchestrator.v1.Tier
 	(EnvironmentStatus)(0),          // 1: practiceengine.orchestrator.v1.EnvironmentStatus
@@ -1871,23 +2026,24 @@ var file_orchestrator_proto_goTypes = []any{
 	(*ConnectRequest)(nil),          // 6: practiceengine.orchestrator.v1.ConnectRequest
 	(*ConnectResponse)(nil),         // 7: practiceengine.orchestrator.v1.ConnectResponse
 	(*SnapshotRequest)(nil),         // 8: practiceengine.orchestrator.v1.SnapshotRequest
-	(*SnapshotResponse)(nil),        // 9: practiceengine.orchestrator.v1.SnapshotResponse
-	(*RestoreRequest)(nil),          // 10: practiceengine.orchestrator.v1.RestoreRequest
-	(*MintCredentialsRequest)(nil),  // 11: practiceengine.orchestrator.v1.MintCredentialsRequest
-	(*MintCredentialsResponse)(nil), // 12: practiceengine.orchestrator.v1.MintCredentialsResponse
-	(*DestroyRequest)(nil),          // 13: practiceengine.orchestrator.v1.DestroyRequest
-	(*DestroyResponse)(nil),         // 14: practiceengine.orchestrator.v1.DestroyResponse
-	(*InjectFaultRequest)(nil),      // 15: practiceengine.orchestrator.v1.InjectFaultRequest
-	(*InjectFaultResponse)(nil),     // 16: practiceengine.orchestrator.v1.InjectFaultResponse
-	(*CaptureBaselineRequest)(nil),  // 17: practiceengine.orchestrator.v1.CaptureBaselineRequest
-	(*CaptureBaselineResponse)(nil), // 18: practiceengine.orchestrator.v1.CaptureBaselineResponse
-	(*CheckRegressionRequest)(nil),  // 19: practiceengine.orchestrator.v1.CheckRegressionRequest
-	(*CheckRegressionResponse)(nil), // 20: practiceengine.orchestrator.v1.CheckRegressionResponse
-	(*ExecValidatorRequest)(nil),    // 21: practiceengine.orchestrator.v1.ExecValidatorRequest
-	(*ExecValidatorResponse)(nil),   // 22: practiceengine.orchestrator.v1.ExecValidatorResponse
-	(*ExecShellRequest)(nil),        // 23: practiceengine.orchestrator.v1.ExecShellRequest
-	(*ExecShellResponse)(nil),       // 24: practiceengine.orchestrator.v1.ExecShellResponse
-	nil,                             // 25: practiceengine.orchestrator.v1.InjectFaultRequest.ParamsEntry
+	(*SnapshotManifest)(nil),        // 9: practiceengine.orchestrator.v1.SnapshotManifest
+	(*SnapshotResponse)(nil),        // 10: practiceengine.orchestrator.v1.SnapshotResponse
+	(*RestoreRequest)(nil),          // 11: practiceengine.orchestrator.v1.RestoreRequest
+	(*MintCredentialsRequest)(nil),  // 12: practiceengine.orchestrator.v1.MintCredentialsRequest
+	(*MintCredentialsResponse)(nil), // 13: practiceengine.orchestrator.v1.MintCredentialsResponse
+	(*DestroyRequest)(nil),          // 14: practiceengine.orchestrator.v1.DestroyRequest
+	(*DestroyResponse)(nil),         // 15: practiceengine.orchestrator.v1.DestroyResponse
+	(*InjectFaultRequest)(nil),      // 16: practiceengine.orchestrator.v1.InjectFaultRequest
+	(*InjectFaultResponse)(nil),     // 17: practiceengine.orchestrator.v1.InjectFaultResponse
+	(*CaptureBaselineRequest)(nil),  // 18: practiceengine.orchestrator.v1.CaptureBaselineRequest
+	(*CaptureBaselineResponse)(nil), // 19: practiceengine.orchestrator.v1.CaptureBaselineResponse
+	(*CheckRegressionRequest)(nil),  // 20: practiceengine.orchestrator.v1.CheckRegressionRequest
+	(*CheckRegressionResponse)(nil), // 21: practiceengine.orchestrator.v1.CheckRegressionResponse
+	(*ExecValidatorRequest)(nil),    // 22: practiceengine.orchestrator.v1.ExecValidatorRequest
+	(*ExecValidatorResponse)(nil),   // 23: practiceengine.orchestrator.v1.ExecValidatorResponse
+	(*ExecShellRequest)(nil),        // 24: practiceengine.orchestrator.v1.ExecShellRequest
+	(*ExecShellResponse)(nil),       // 25: practiceengine.orchestrator.v1.ExecShellResponse
+	nil,                             // 26: practiceengine.orchestrator.v1.InjectFaultRequest.ParamsEntry
 }
 var file_orchestrator_proto_depIdxs = []int32{
 	0,  // 0: practiceengine.orchestrator.v1.ProvisionRequest.tier:type_name -> practiceengine.orchestrator.v1.Tier
@@ -1895,36 +2051,37 @@ var file_orchestrator_proto_depIdxs = []int32{
 	3,  // 2: practiceengine.orchestrator.v1.ProvisionRequest.fixtures:type_name -> practiceengine.orchestrator.v1.FixtureRef
 	1,  // 3: practiceengine.orchestrator.v1.ProvisionResponse.status:type_name -> practiceengine.orchestrator.v1.EnvironmentStatus
 	7,  // 4: practiceengine.orchestrator.v1.ProvisionResponse.endpoints:type_name -> practiceengine.orchestrator.v1.ConnectResponse
-	0,  // 5: practiceengine.orchestrator.v1.RestoreRequest.tier:type_name -> practiceengine.orchestrator.v1.Tier
-	2,  // 6: practiceengine.orchestrator.v1.RestoreRequest.resources:type_name -> practiceengine.orchestrator.v1.ResourceSpec
-	25, // 7: practiceengine.orchestrator.v1.InjectFaultRequest.params:type_name -> practiceengine.orchestrator.v1.InjectFaultRequest.ParamsEntry
-	4,  // 8: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Provision:input_type -> practiceengine.orchestrator.v1.ProvisionRequest
-	6,  // 9: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Connect:input_type -> practiceengine.orchestrator.v1.ConnectRequest
-	8,  // 10: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Snapshot:input_type -> practiceengine.orchestrator.v1.SnapshotRequest
-	10, // 11: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Restore:input_type -> practiceengine.orchestrator.v1.RestoreRequest
-	11, // 12: practiceengine.orchestrator.v1.EnvironmentOrchestrator.MintValidatorCredentials:input_type -> practiceengine.orchestrator.v1.MintCredentialsRequest
-	13, // 13: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Destroy:input_type -> practiceengine.orchestrator.v1.DestroyRequest
-	15, // 14: practiceengine.orchestrator.v1.EnvironmentOrchestrator.InjectFault:input_type -> practiceengine.orchestrator.v1.InjectFaultRequest
-	17, // 15: practiceengine.orchestrator.v1.EnvironmentOrchestrator.CaptureBaseline:input_type -> practiceengine.orchestrator.v1.CaptureBaselineRequest
-	19, // 16: practiceengine.orchestrator.v1.EnvironmentOrchestrator.CheckRegression:input_type -> practiceengine.orchestrator.v1.CheckRegressionRequest
-	21, // 17: practiceengine.orchestrator.v1.EnvironmentOrchestrator.ExecValidator:input_type -> practiceengine.orchestrator.v1.ExecValidatorRequest
-	23, // 18: practiceengine.orchestrator.v1.EnvironmentOrchestrator.ExecShell:input_type -> practiceengine.orchestrator.v1.ExecShellRequest
-	5,  // 19: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Provision:output_type -> practiceengine.orchestrator.v1.ProvisionResponse
-	7,  // 20: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Connect:output_type -> practiceengine.orchestrator.v1.ConnectResponse
-	9,  // 21: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Snapshot:output_type -> practiceengine.orchestrator.v1.SnapshotResponse
-	5,  // 22: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Restore:output_type -> practiceengine.orchestrator.v1.ProvisionResponse
-	12, // 23: practiceengine.orchestrator.v1.EnvironmentOrchestrator.MintValidatorCredentials:output_type -> practiceengine.orchestrator.v1.MintCredentialsResponse
-	14, // 24: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Destroy:output_type -> practiceengine.orchestrator.v1.DestroyResponse
-	16, // 25: practiceengine.orchestrator.v1.EnvironmentOrchestrator.InjectFault:output_type -> practiceengine.orchestrator.v1.InjectFaultResponse
-	18, // 26: practiceengine.orchestrator.v1.EnvironmentOrchestrator.CaptureBaseline:output_type -> practiceengine.orchestrator.v1.CaptureBaselineResponse
-	20, // 27: practiceengine.orchestrator.v1.EnvironmentOrchestrator.CheckRegression:output_type -> practiceengine.orchestrator.v1.CheckRegressionResponse
-	22, // 28: practiceengine.orchestrator.v1.EnvironmentOrchestrator.ExecValidator:output_type -> practiceengine.orchestrator.v1.ExecValidatorResponse
-	24, // 29: practiceengine.orchestrator.v1.EnvironmentOrchestrator.ExecShell:output_type -> practiceengine.orchestrator.v1.ExecShellResponse
-	19, // [19:30] is the sub-list for method output_type
-	8,  // [8:19] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	9,  // 5: practiceengine.orchestrator.v1.SnapshotResponse.manifest:type_name -> practiceengine.orchestrator.v1.SnapshotManifest
+	0,  // 6: practiceengine.orchestrator.v1.RestoreRequest.tier:type_name -> practiceengine.orchestrator.v1.Tier
+	2,  // 7: practiceengine.orchestrator.v1.RestoreRequest.resources:type_name -> practiceengine.orchestrator.v1.ResourceSpec
+	26, // 8: practiceengine.orchestrator.v1.InjectFaultRequest.params:type_name -> practiceengine.orchestrator.v1.InjectFaultRequest.ParamsEntry
+	4,  // 9: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Provision:input_type -> practiceengine.orchestrator.v1.ProvisionRequest
+	6,  // 10: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Connect:input_type -> practiceengine.orchestrator.v1.ConnectRequest
+	8,  // 11: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Snapshot:input_type -> practiceengine.orchestrator.v1.SnapshotRequest
+	11, // 12: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Restore:input_type -> practiceengine.orchestrator.v1.RestoreRequest
+	12, // 13: practiceengine.orchestrator.v1.EnvironmentOrchestrator.MintValidatorCredentials:input_type -> practiceengine.orchestrator.v1.MintCredentialsRequest
+	14, // 14: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Destroy:input_type -> practiceengine.orchestrator.v1.DestroyRequest
+	16, // 15: practiceengine.orchestrator.v1.EnvironmentOrchestrator.InjectFault:input_type -> practiceengine.orchestrator.v1.InjectFaultRequest
+	18, // 16: practiceengine.orchestrator.v1.EnvironmentOrchestrator.CaptureBaseline:input_type -> practiceengine.orchestrator.v1.CaptureBaselineRequest
+	20, // 17: practiceengine.orchestrator.v1.EnvironmentOrchestrator.CheckRegression:input_type -> practiceengine.orchestrator.v1.CheckRegressionRequest
+	22, // 18: practiceengine.orchestrator.v1.EnvironmentOrchestrator.ExecValidator:input_type -> practiceengine.orchestrator.v1.ExecValidatorRequest
+	24, // 19: practiceengine.orchestrator.v1.EnvironmentOrchestrator.ExecShell:input_type -> practiceengine.orchestrator.v1.ExecShellRequest
+	5,  // 20: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Provision:output_type -> practiceengine.orchestrator.v1.ProvisionResponse
+	7,  // 21: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Connect:output_type -> practiceengine.orchestrator.v1.ConnectResponse
+	10, // 22: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Snapshot:output_type -> practiceengine.orchestrator.v1.SnapshotResponse
+	5,  // 23: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Restore:output_type -> practiceengine.orchestrator.v1.ProvisionResponse
+	13, // 24: practiceengine.orchestrator.v1.EnvironmentOrchestrator.MintValidatorCredentials:output_type -> practiceengine.orchestrator.v1.MintCredentialsResponse
+	15, // 25: practiceengine.orchestrator.v1.EnvironmentOrchestrator.Destroy:output_type -> practiceengine.orchestrator.v1.DestroyResponse
+	17, // 26: practiceengine.orchestrator.v1.EnvironmentOrchestrator.InjectFault:output_type -> practiceengine.orchestrator.v1.InjectFaultResponse
+	19, // 27: practiceengine.orchestrator.v1.EnvironmentOrchestrator.CaptureBaseline:output_type -> practiceengine.orchestrator.v1.CaptureBaselineResponse
+	21, // 28: practiceengine.orchestrator.v1.EnvironmentOrchestrator.CheckRegression:output_type -> practiceengine.orchestrator.v1.CheckRegressionResponse
+	23, // 29: practiceengine.orchestrator.v1.EnvironmentOrchestrator.ExecValidator:output_type -> practiceengine.orchestrator.v1.ExecValidatorResponse
+	25, // 30: practiceengine.orchestrator.v1.EnvironmentOrchestrator.ExecShell:output_type -> practiceengine.orchestrator.v1.ExecShellResponse
+	20, // [20:31] is the sub-list for method output_type
+	9,  // [9:20] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_orchestrator_proto_init() }
@@ -1938,7 +2095,7 @@ func file_orchestrator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_orchestrator_proto_rawDesc), len(file_orchestrator_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   24,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
